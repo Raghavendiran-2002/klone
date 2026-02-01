@@ -1,0 +1,11 @@
+apiVersion: v2
+name: klone-training
+description: Klone (Kubernetes-in-Kubernetes) training platform — static k3s cluster + dynamic cluster manager API
+type: application
+version: 0.4.6
+appVersion: "2.0.5"
+keywords:
+  - kubernetes
+  - k3s
+  - klone
+  - training
