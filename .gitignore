@@ -1,0 +1,33 @@
+# Kubernetes and Helm
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Helm
+charts/
+*.tgz
+
+# IDE
+.vscode/
+.idea/
+*.iml
+
+# Temporary files
+*.tmp
+*.log
+temp-kubeconfig.yaml
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+
+# Local test files
+test-*
+scratch/
