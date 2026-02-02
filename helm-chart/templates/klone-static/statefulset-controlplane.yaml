@@ -1,0 +1,44 @@
+{{- if .Values.klone.enabled }}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: k3s-control-plane
+  namespace: {{ .Values.klone.namespace }}
+  labels:
+    app: k3s-control-plane
+    {{- include "klone.labels" . | nindent 4 }}
+spec:
+  serviceName: k3s-control-plane
+  replicas: {{ .Values.klone.k3s.controlPlane.replicas }}
+  selector:
+    matchLabels:
+      app: k3s-control-plane
+  template:
+    metadata:
+      labels:
+        app: k3s-control-plane
+    spec:
+      containers:
+        - name: k3s-server
+          image: {{ .Values.klone.k3s.image }}
+          securityContext:
+            privileged: true
+          args:
+            - server
+            - --cluster-init
+            - --token
+            - {{ .Values.klone.k3s.token }}
+            - --tls-san
+            - k3s-control-plane.{{ .Values.klone.namespace }}.svc.cluster.local
+            - --write-kubeconfig=/var/lib/rancher/k3s/kubeconfig.yaml
+            - --write-kubeconfig-mode=644
+          ports:
+            - containerPort: 6443
+          volumeMounts:
+            - name: k3s-storage
+              mountPath: /var/lib/rancher/k3s
+      volumes:
+        - name: k3s-storage
+          persistentVolumeClaim:
+            claimName: k3s-data
+{{- end }}
