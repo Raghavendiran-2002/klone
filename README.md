@@ -29,3 +29,11 @@ See [CLAUDE.md](CLAUDE.md) for detailed development and operational documentatio
 - k3s nested clusters
 - Tailscale networking
 - ttyd web terminals
+
+## Requirements
+
+- Kubernetes 1.28+
+- Tailscale operator
+- metrics-server
+- Node with `workload=primary` label
+- Storage class: `local-path`
