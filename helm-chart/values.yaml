@@ -1,8 +1,9 @@
 # klone-static — static single k3s cluster with web terminal
+# This deploys a single pre-configured k3s cluster that's always available
 klone:
   k3s:
-    image: rancher/k3s:v1.35.1-k3s1
-    token: supersecrettoken123
+    image: rancher/k3s:v1.35.1-k3s1  # Lightweight Kubernetes distribution
+    token: supersecrettoken123  # Shared secret for k3s agent authentication
     controlPlane:
       replicas: 1
     worker:
