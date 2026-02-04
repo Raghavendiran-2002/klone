@@ -15,6 +15,9 @@ A Kubernetes-in-Kubernetes training platform that runs nested k3s clusters for h
 # Deploy with Helm
 helm install klone-training helm-chart --namespace klone --create-namespace
 
+# Verify deployment
+kubectl get pods -n klone
+
 # Access the web interface
 # Navigate to the Tailscale ingress URL
 ```
