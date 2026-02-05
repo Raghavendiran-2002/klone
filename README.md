@@ -40,3 +40,13 @@ See [CLAUDE.md](CLAUDE.md) for detailed development and operational documentatio
 - metrics-server
 - Node with `workload=primary` label
 - Storage class: `local-path`
+
+## Usage
+
+Create a new cluster through the web interface or API:
+
+```bash
+curl -X POST http://klone.{your-domain}/api/clusters \
+  -H "Content-Type: application/json" \
+  -d '{"name": "dev-cluster"}'
+```
