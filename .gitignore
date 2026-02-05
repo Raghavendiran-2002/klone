@@ -31,3 +31,7 @@ ENV/
 # Local test files
 test-*
 scratch/
+
+# Backup files
+*.bak
+*.backup
