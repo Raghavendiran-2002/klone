@@ -14,8 +14,8 @@ klone:
     replicas: 1
 
   storage:
-    storageClass: local-path # dynamic provisioner; switch to local-storage if pre-provisioned PVs exist
-    size: 5Gi
+    storageClass: local-path # Dynamic provisioner; switch to local-storage if pre-provisioned PVs exist
+    size: 5Gi # Storage size for k3s datastore and cached binaries
 
   ingress:
     host: klone-terminal
