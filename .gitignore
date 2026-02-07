@@ -35,3 +35,8 @@ scratch/
 # Backup files
 *.bak
 *.backup
+*.old
+
+# Editor files
+*.swn
+*~.nib
