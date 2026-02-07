@@ -46,7 +46,14 @@ See [CLAUDE.md](CLAUDE.md) for detailed development and operational documentatio
 Create a new cluster through the web interface or API:
 
 ```bash
+# Create a new cluster
 curl -X POST http://klone.{your-domain}/api/clusters \
   -H "Content-Type: application/json" \
   -d '{"name": "dev-cluster"}'
+
+# List all clusters
+curl http://klone.{your-domain}/api/clusters
+
+# Delete a cluster
+curl -X DELETE http://klone.{your-domain}/api/clusters/dev-cluster
 ```
