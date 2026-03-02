@@ -20,21 +20,6 @@ spec:
         app: klone
     spec:
       serviceAccountName: klone
-      tolerations:
-        - key: node-role.kubernetes.io/control-plane
-          operator: Exists
-          effect: NoSchedule
-      {{- if .Values.kloneApi.nodeAffinity.enabled }}
-      affinity:
-        nodeAffinity:
-          requiredDuringSchedulingIgnoredDuringExecution:
-            nodeSelectorTerms:
-              - matchExpressions:
-                  - key: workload
-                    operator: In
-                    values:
-                      - {{ .Values.kloneApi.nodeAffinity.label }}
-      {{- end }}
       initContainers:
         - name: install-deps
           image: {{ .Values.kloneApi.image }}

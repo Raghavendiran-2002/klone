@@ -30,10 +30,6 @@ kloneApi:
   replicas: 1
   tailscaleDomain: taile3ca5.ts.net
 
-  nodeAffinity:
-    enabled: false # Set to true and label a node with workload=primary for PV binding
-    label: primary # Match the node label for persistent storage affinity
-
   resources:
     limits:
       cpu: 500m

@@ -1,0 +1,9 @@
+apiVersion: klone.klone.io/v1alpha1
+kind: KloneCluster
+metadata:
+  labels:
+    app.kubernetes.io/name: operator
+    app.kubernetes.io/managed-by: kustomize
+  name: klonecluster-sample
+spec:
+  # TODO(user): Add fields here

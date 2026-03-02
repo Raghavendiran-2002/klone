@@ -242,21 +242,6 @@ def _do_create_cluster(name: str):
                 namespace=ns_name,
                 name="k3s-data",
             ),
-            node_affinity=client.V1VolumeNodeAffinity(
-                required=client.V1NodeSelector(
-                    node_selector_terms=[
-                        client.V1NodeSelectorTerm(
-                            match_expressions=[
-                                client.V1NodeSelectorRequirement(
-                                    key="workload",
-                                    operator="In",
-                                    values=["primary"],
-                                )
-                            ]
-                        )
-                    ]
-                )
-            ),
         ),
     )
     _create_or_ignore(lambda: core_v1.create_persistent_volume(pv))
