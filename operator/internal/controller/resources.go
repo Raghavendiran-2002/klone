@@ -5,8 +5,8 @@ import (
 
 	klonev1alpha1 "github.com/klone/operator/api/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 // BuildNamespace creates a Namespace for the KloneCluster
@@ -15,10 +15,10 @@ func BuildNamespace(cluster *klonev1alpha1.KloneCluster) *corev1.Namespace {
 		ObjectMeta: metav1.ObjectMeta{
 			Name: GetNamespaceName(cluster.Name),
 			Labels: map[string]string{
-				"klone-managed":      "true",
-				"klone-cluster-name": cluster.Name,
-				"app.kubernetes.io/name": "klone",
-				"app.kubernetes.io/instance": cluster.Name,
+				"klone-managed":                "true",
+				"klone-cluster-name":           cluster.Name,
+				"app.kubernetes.io/name":       "klone",
+				"app.kubernetes.io/instance":   cluster.Name,
 				"app.kubernetes.io/managed-by": "klone-operator",
 			},
 		},

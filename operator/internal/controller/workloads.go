@@ -257,8 +257,7 @@ ln -sf $CACHE/kubectl /usr/local/bin/kubectl
 # Cache ttyd
 if [ ! -x "$CACHE/ttyd" ]; then
   echo "Caching ttyd (first run)..."
-  wget -O /tmp/ttyd.tar.gz https://github.com/tsl0922/ttyd/releases/download/1.7.7/ttyd.x86_64
-  mv /tmp/ttyd.x86_64 $CACHE/ttyd
+  wget -O $CACHE/ttyd https://github.com/tsl0922/ttyd/releases/download/1.7.7/ttyd.x86_64
   chmod +x $CACHE/ttyd
 fi
 ln -sf $CACHE/ttyd /usr/local/bin/ttyd

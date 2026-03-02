@@ -127,10 +127,10 @@ func BuildLoadBalancerIngress(cluster *klonev1alpha1.KloneCluster) *networkingv1
 	// Get LoadBalancer configuration
 	scheme := "internet-facing"
 	annotations := map[string]string{
-		"kubernetes.io/ingress.class":              "alb",
-		"alb.ingress.kubernetes.io/scheme":         "internet-facing",
-		"alb.ingress.kubernetes.io/target-type":    "ip",
-		"alb.ingress.kubernetes.io/listen-ports":   `[{"HTTPS":443}]`,
+		"kubernetes.io/ingress.class":            "alb",
+		"alb.ingress.kubernetes.io/scheme":       "internet-facing",
+		"alb.ingress.kubernetes.io/target-type":  "ip",
+		"alb.ingress.kubernetes.io/listen-ports": `[{"HTTPS":443}]`,
 	}
 
 	if cluster.Spec.Ingress.LoadBalancer != nil {
