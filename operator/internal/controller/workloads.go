@@ -237,6 +237,11 @@ func BuildTerminalDeployment(cluster *klonev1alpha1.KloneCluster) *appsv1.Deploy
 		replicas = cluster.Spec.Terminal.Replicas
 	}
 
+	token := cluster.Spec.K3s.Token
+	if token == "" {
+		token = "supersecrettoken123"
+	}
+
 	// Terminal setup script with caching
 	setupScript := `#!/bin/sh
 set -e
@@ -272,10 +277,29 @@ if [ ! -x "$CACHE/ttyd" ]; then
 fi
 ln -sf $CACHE/ttyd /usr/local/bin/ttyd
 
-# Configure kubectl context
-export KUBECONFIG=/var/lib/rancher/k3s/kubeconfig.yaml
+# Configure kubectl to use k3s cluster
+export KUBECONFIG=/shared/kubeconfig.yaml
+echo "Using kubeconfig from /shared/kubeconfig.yaml"
 
-echo "Terminal ready!"
+# Wait for k3s API to be ready (simple connectivity check)
+echo "Waiting for k3s API server..."
+max_attempts=30
+attempt=0
+until curl -k -s https://k3s-control-plane:6443/healthz > /dev/null 2>&1; do
+  attempt=$((attempt + 1))
+  if [ $attempt -ge $max_attempts ]; then
+    echo "Warning: k3s API server not responding, but starting terminal anyway"
+    break
+  fi
+  sleep 2
+done
+echo "k3s API server is ready!"
+
+# Set KUBECONFIG in .bashrc so it persists in terminal sessions
+echo "export KUBECONFIG=/shared/kubeconfig.yaml" >> ~/.bashrc
+
+echo "Terminal ready! Access via ttyd on port 80"
+echo "Try 'kubectl get nodes' to interact with the nested k3s cluster"
 exec ttyd -p 80 -W bash
 `
 
@@ -302,6 +326,40 @@ exec ttyd -p 80 -W bash
 					},
 				},
 				Spec: corev1.PodSpec{
+					InitContainers: []corev1.Container{
+						{
+							Name:    "setup-kubeconfig",
+							Image:   image,
+							Command: []string{"/bin/sh", "-c"},
+							Args: []string{`
+set -e
+apk add --no-cache sed
+# Wait for kubeconfig to be available
+echo "Waiting for kubeconfig..."
+while [ ! -f /k3s-config/kubeconfig.yaml ]; do
+  sleep 2
+done
+
+# Copy kubeconfig to shared volume and modify server URL
+cp /k3s-config/kubeconfig.yaml /shared/kubeconfig.yaml
+sed -i 's|https://127.0.0.1:6443|https://k3s-control-plane:6443|g' /shared/kubeconfig.yaml
+# Add insecure-skip-tls-verify
+sed -i '/server: https:\/\/k3s-control-plane:6443/a\    insecure-skip-tls-verify: true' /shared/kubeconfig.yaml
+echo "Kubeconfig ready!"
+`},
+							VolumeMounts: []corev1.VolumeMount{
+								{
+									Name:      "k3s-data",
+									MountPath: "/k3s-config",
+									ReadOnly:  true,
+								},
+								{
+									Name:      "shared-config",
+									MountPath: "/shared",
+								},
+							},
+						},
+					},
 					Containers: []corev1.Container{
 						{
 							Name:    "terminal",
@@ -315,6 +373,12 @@ exec ttyd -p 80 -W bash
 									Protocol:      corev1.ProtocolTCP,
 								},
 							},
+							Env: []corev1.EnvVar{
+								{
+									Name:  "K3S_TOKEN",
+									Value: token,
+								},
+							},
 							VolumeMounts: []corev1.VolumeMount{
 								{
 									Name:      "k3s-data",
@@ -326,6 +390,10 @@ exec ttyd -p 80 -W bash
 									MountPath: "/k3s/term-cache",
 									SubPath:   "term-cache",
 								},
+								{
+									Name:      "shared-config",
+									MountPath: "/shared",
+								},
 							},
 						},
 					},
@@ -336,6 +404,12 @@ exec ttyd -p 80 -W bash
 								PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
 									ClaimName: GetPVCName(),
 								},
+							},
+						},
+						{
+							Name: "shared-config",
+							VolumeSource: corev1.VolumeSource{
+								EmptyDir: &corev1.EmptyDirVolumeSource{},
 							},
 						},
 					},
