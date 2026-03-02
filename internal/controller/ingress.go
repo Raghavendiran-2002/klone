@@ -2,6 +2,7 @@ package controller
 
 import (
 	"fmt"
+	"maps"
 
 	klonev1alpha1 "github.com/klone/operator/api/v1alpha1"
 	networkingv1 "k8s.io/api/networking/v1"
@@ -125,7 +126,6 @@ func BuildLoadBalancerIngress(cluster *klonev1alpha1.KloneCluster) *networkingv1
 	namespaceName := GetNamespaceName(cluster.Name)
 
 	// Get LoadBalancer configuration
-	scheme := "internet-facing"
 	annotations := map[string]string{
 		"kubernetes.io/ingress.class":            "alb",
 		"alb.ingress.kubernetes.io/scheme":       "internet-facing",
@@ -135,8 +135,7 @@ func BuildLoadBalancerIngress(cluster *klonev1alpha1.KloneCluster) *networkingv1
 
 	if cluster.Spec.Ingress.LoadBalancer != nil {
 		if cluster.Spec.Ingress.LoadBalancer.Scheme != "" {
-			scheme = cluster.Spec.Ingress.LoadBalancer.Scheme
-			annotations["alb.ingress.kubernetes.io/scheme"] = scheme
+			annotations["alb.ingress.kubernetes.io/scheme"] = cluster.Spec.Ingress.LoadBalancer.Scheme
 		}
 
 		// Add certificate ARN if provided
@@ -156,9 +155,7 @@ func BuildLoadBalancerIngress(cluster *klonev1alpha1.KloneCluster) *networkingv1
 
 		// Merge user-provided annotations
 		if cluster.Spec.Ingress.LoadBalancer.Annotations != nil {
-			for k, v := range cluster.Spec.Ingress.LoadBalancer.Annotations {
-				annotations[k] = v
-			}
+			maps.Copy(annotations, cluster.Spec.Ingress.LoadBalancer.Annotations)
 		}
 	}
 

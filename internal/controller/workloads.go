@@ -22,7 +22,7 @@ func BuildControlPlaneStatefulSet(cluster *klonev1alpha1.KloneCluster) *appsv1.S
 
 	token := cluster.Spec.K3s.Token
 	if token == "" {
-		token = "supersecrettoken123"
+		token = DefaultK3sToken
 	}
 
 	replicas := int32(1)
@@ -143,7 +143,7 @@ func BuildWorkerDeployment(cluster *klonev1alpha1.KloneCluster) *appsv1.Deployme
 
 	token := cluster.Spec.K3s.Token
 	if token == "" {
-		token = "supersecrettoken123"
+		token = DefaultK3sToken
 	}
 
 	replicas := int32(2)
@@ -223,7 +223,7 @@ func BuildTerminalDeployment(cluster *klonev1alpha1.KloneCluster) *appsv1.Deploy
 
 	token := cluster.Spec.K3s.Token
 	if token == "" {
-		token = "supersecrettoken123"
+		token = DefaultK3sToken
 	}
 
 	// Terminal setup script with caching
@@ -296,7 +296,7 @@ exec ttyd -p 80 -W bash
 			Name:      GetTerminalDeploymentName(),
 			Namespace: namespaceName,
 			Labels: map[string]string{
-				"app":                "klone-terminal",
+				"app":                TerminalDeploymentName,
 				"klone-cluster-name": cluster.Name,
 			},
 		},
@@ -304,13 +304,13 @@ exec ttyd -p 80 -W bash
 			Replicas: &replicas,
 			Selector: &metav1.LabelSelector{
 				MatchLabels: map[string]string{
-					"app": "klone-terminal",
+					"app": TerminalDeploymentName,
 				},
 			},
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{
 					Labels: map[string]string{
-						"app": "klone-terminal",
+						"app": TerminalDeploymentName,
 					},
 				},
 				Spec: corev1.PodSpec{

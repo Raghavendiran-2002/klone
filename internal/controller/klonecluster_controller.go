@@ -83,7 +83,7 @@ func (r *KloneClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	}
 
 	// Handle deletion with finalizer
-	if !cluster.ObjectMeta.DeletionTimestamp.IsZero() {
+	if !cluster.DeletionTimestamp.IsZero() {
 		return r.handleDeletion(ctx, cluster)
 	}
 
@@ -400,12 +400,13 @@ func (r *KloneClusterReconciler) updateStatus(ctx context.Context, cluster *klon
 			Namespace: namespaceName,
 		}, ingress); err == nil {
 			// Update ingress URL based on type
-			if cluster.Spec.Ingress.Type == IngressTypeTailscale {
+			switch cluster.Spec.Ingress.Type {
+			case IngressTypeTailscale:
 				if cluster.Spec.Ingress.Tailscale != nil && cluster.Spec.Ingress.Tailscale.Domain != "" {
 					cluster.Status.IngressURL = fmt.Sprintf("https://%s-terminal.%s",
 						cluster.Name, cluster.Spec.Ingress.Tailscale.Domain)
 				}
-			} else if cluster.Spec.Ingress.Type == IngressTypeLoadBalancer {
+			case IngressTypeLoadBalancer:
 				// Get LB hostname from ingress status
 				if len(ingress.Status.LoadBalancer.Ingress) > 0 {
 					lbHostname := ingress.Status.LoadBalancer.Ingress[0].Hostname
@@ -561,7 +562,7 @@ func (r *KloneClusterReconciler) cleanupHostPath(ctx context.Context, cluster *k
 	}
 
 	// Wait for job to complete (with timeout)
-	for i := 0; i < 30; i++ {
+	for range 30 {
 		time.Sleep(1 * time.Second)
 
 		if err := r.Get(ctx, types.NamespacedName{

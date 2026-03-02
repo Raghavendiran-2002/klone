@@ -6,6 +6,13 @@ import (
 	"fmt"
 )
 
+const (
+	// TerminalDeploymentName is the name of the terminal deployment
+	TerminalDeploymentName = "klone-terminal"
+	// DefaultK3sToken is the default token for k3s authentication
+	DefaultK3sToken = "supersecrettoken123"
+)
+
 // AllocateCIDRs generates unique CIDRs for a cluster based on its name
 // Uses MD5 hash to ensure deterministic and conflict-free allocation
 func AllocateCIDRs(clusterName string) (clusterCIDR, serviceCIDR string) {
@@ -49,7 +56,7 @@ func GetWorkerDeploymentName() string {
 
 // GetTerminalDeploymentName returns the terminal Deployment name
 func GetTerminalDeploymentName() string {
-	return "klone-terminal"
+	return TerminalDeploymentName
 }
 
 // GetControlPlaneServiceName returns the headless service name for control plane

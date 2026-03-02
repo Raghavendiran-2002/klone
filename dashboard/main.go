@@ -80,7 +80,9 @@ func serveIndex(w http.ResponseWriter, r *http.Request) {
 
 	html := getIndexHTML()
 	w.Header().Set("Content-Type", "text/html")
-	w.Write([]byte(html))
+	if _, err := w.Write([]byte(html)); err != nil {
+		log.Printf("Failed to write response: %v", err)
+	}
 }
 
 func listClusters(w http.ResponseWriter, r *http.Request) {
@@ -93,7 +95,9 @@ func listClusters(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(clusterList)
+	if err := json.NewEncoder(w).Encode(clusterList); err != nil {
+		log.Printf("Failed to encode cluster list: %v", err)
+	}
 }
 
 func getCluster(w http.ResponseWriter, r *http.Request) {
@@ -116,7 +120,9 @@ func getCluster(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(cluster)
+	if err := json.NewEncoder(w).Encode(cluster); err != nil {
+		log.Printf("Failed to encode cluster: %v", err)
+	}
 }
 
 func proxyTerminal(w http.ResponseWriter, r *http.Request) {
@@ -466,8 +472,12 @@ func getIndexHTML() string {
                 renderClusters(clusters);
             } catch (error) {
                 console.error('Failed to load clusters:', error);
-                document.getElementById('clustersContainer').innerHTML =
-                    '<div class="empty-state"><div class="empty-state-icon">⚠️</div><div class="empty-state-title">Failed to load clusters</div><div class="empty-state-text">Error: ' + error.message + '</div></div>';
+                const errorHTML = '<div class="empty-state">' +
+                    '<div class="empty-state-icon">⚠️</div>' +
+                    '<div class="empty-state-title">Failed to load clusters</div>' +
+                    '<div class="empty-state-text">Error: ' + error.message + '</div>' +
+                    '</div>';
+                document.getElementById('clustersContainer').innerHTML = errorHTML;
             }
         }
 
@@ -475,7 +485,12 @@ func getIndexHTML() string {
             const container = document.getElementById('clustersContainer');
 
             if (clusters.length === 0) {
-                container.innerHTML = '<div class="empty-state"><div class="empty-state-icon">📦</div><div class="empty-state-title">No Clusters Found</div><div class="empty-state-text">Create your first KloneCluster to get started</div></div>';
+                const emptyHTML = '<div class="empty-state">' +
+                    '<div class="empty-state-icon">📦</div>' +
+                    '<div class="empty-state-title">No Clusters Found</div>' +
+                    '<div class="empty-state-text">Create your first KloneCluster to get started</div>' +
+                    '</div>';
+                container.innerHTML = emptyHTML;
                 return;
             }
 
@@ -487,27 +502,44 @@ func getIndexHTML() string {
 
                 const terminalReady = status.conditions?.find(c => c.type === 'TerminalReady' && c.status === 'True');
 
+                const namespaceHTML = '<div class="info-item">' +
+                    '<div class="info-label">Namespace</div>' +
+                    '<div class="info-value">' + (status.namespace || '-') + '</div></div>';
+                const clusterCIDRHTML = '<div class="info-item">' +
+                    '<div class="info-label">Cluster CIDR</div>' +
+                    '<div class="info-value">' + (status.clusterCIDR || '-') + '</div></div>';
+                const serviceCIDRHTML = '<div class="info-item">' +
+                    '<div class="info-label">Service CIDR</div>' +
+                    '<div class="info-value">' + (status.serviceCIDR || '-') + '</div></div>';
+                const ingressTypeHTML = '<div class="info-item">' +
+                    '<div class="info-label">Ingress Type</div>' +
+                    '<div class="info-value">' + (spec.ingress?.type || 'none') + '</div></div>';
+
+                const workloadsHTML = workloads.length > 0 ?
+                    '<div class="workloads"><div class="workloads-title">Workloads</div>' +
+                    workloads.map(w => {
+                        const isReady = w.ready === w.desired;
+                        const statusClass = isReady ? 'workload-ready' : 'workload-not-ready';
+                        return '<div class="workload-item">' +
+                            '<div class="workload-name">' + w.kind + '/' + w.name + '</div>' +
+                            '<div class="workload-status ' + statusClass + '">' +
+                            w.ready + '/' + w.desired + '</div></div>';
+                    }).join('') + '</div>' : '';
+
+                const terminalBtn = terminalReady ?
+                    '<button class="connect-btn" onclick="connectTerminal(\'' +
+                    cluster.metadata.name + '\')">🖥️ Connect Terminal</button>' : '';
+
                 return '<div class="cluster-card">' +
                     '<div class="cluster-header">' +
                     '<div class="cluster-name">' + cluster.metadata.name + '</div>' +
                     '<div class="phase-badge phase-' + phase + '">' + phase + '</div>' +
                     '</div>' +
                     '<div class="cluster-info">' +
-                    '<div class="info-item"><div class="info-label">Namespace</div><div class="info-value">' + (status.namespace || '-') + '</div></div>' +
-                    '<div class="info-item"><div class="info-label">Cluster CIDR</div><div class="info-value">' + (status.clusterCIDR || '-') + '</div></div>' +
-                    '<div class="info-item"><div class="info-label">Service CIDR</div><div class="info-value">' + (status.serviceCIDR || '-') + '</div></div>' +
-                    '<div class="info-item"><div class="info-label">Ingress Type</div><div class="info-value">' + (spec.ingress?.type || 'none') + '</div></div>' +
+                    namespaceHTML + clusterCIDRHTML + serviceCIDRHTML + ingressTypeHTML +
                     '</div>' +
-                    (workloads.length > 0 ? '<div class="workloads"><div class="workloads-title">Workloads</div>' +
-                    workloads.map(w => {
-                        const isReady = w.ready === w.desired;
-                        return '<div class="workload-item">' +
-                            '<div class="workload-name">' + w.kind + '/' + w.name + '</div>' +
-                            '<div class="workload-status ' + (isReady ? 'workload-ready' : 'workload-not-ready') + '">' + w.ready + '/' + w.desired + '</div>' +
-                            '</div>';
-                    }).join('') +
-                    '</div>' : '') +
-                    (terminalReady ? '<button class="connect-btn" onclick="connectTerminal(\'' + cluster.metadata.name + '\')">🖥️ Connect Terminal</button>' : '') +
+                    workloadsHTML +
+                    terminalBtn +
                     '</div>';
             }).join('');
 
