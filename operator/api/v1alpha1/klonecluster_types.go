@@ -25,37 +25,297 @@ import (
 
 // KloneClusterSpec defines the desired state of KloneCluster
 type KloneClusterSpec struct {
-	// INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
-	// Important: Run "make" to regenerate code after modifying this file
-	// The following markers will use OpenAPI v3 schema to validate the value
-	// More info: https://book.kubebuilder.io/reference/markers/crd-validation.html
+	// k3s configuration for the nested cluster
+	// +required
+	K3s K3sSpec `json:"k3s"`
 
-	// foo is an example field of KloneCluster. Edit klonecluster_types.go to remove/update
+	// storage configuration for persistent volumes
+	// +required
+	Storage StorageSpec `json:"storage"`
+
+	// terminal configuration for web-based access
 	// +optional
-	Foo *string `json:"foo,omitempty"`
+	Terminal *TerminalSpec `json:"terminal,omitempty"`
+
+	// ingress configuration for external access
+	// +optional
+	Ingress *IngressSpec `json:"ingress,omitempty"`
+
+	// networking configuration for cluster and service CIDRs
+	// +optional
+	Networking *NetworkingSpec `json:"networking,omitempty"`
+
+	// metricsServer configuration for auto-installation
+	// +optional
+	MetricsServer *MetricsServerSpec `json:"metricsServer,omitempty"`
+}
+
+// K3sSpec defines k3s cluster configuration
+type K3sSpec struct {
+	// image is the k3s container image
+	// +kubebuilder:default="rancher/k3s:v1.35.1-k3s1"
+	// +optional
+	Image string `json:"image,omitempty"`
+
+	// token is the shared secret for k3s agent authentication
+	// +kubebuilder:default="supersecrettoken123"
+	// +optional
+	Token string `json:"token,omitempty"`
+
+	// controlPlane configuration
+	// +optional
+	ControlPlane *ControlPlaneSpec `json:"controlPlane,omitempty"`
+
+	// worker configuration
+	// +optional
+	Worker *WorkerSpec `json:"worker,omitempty"`
+}
+
+// ControlPlaneSpec defines control plane configuration
+type ControlPlaneSpec struct {
+	// replicas is the number of control plane instances
+	// +kubebuilder:default=1
+	// +kubebuilder:validation:Minimum=1
+	// +optional
+	Replicas int32 `json:"replicas,omitempty"`
+
+	// resources for control plane pods
+	// +optional
+	Resources *ResourceRequirements `json:"resources,omitempty"`
+}
+
+// WorkerSpec defines worker node configuration
+type WorkerSpec struct {
+	// replicas is the number of worker nodes
+	// +kubebuilder:default=2
+	// +kubebuilder:validation:Minimum=0
+	// +optional
+	Replicas int32 `json:"replicas,omitempty"`
+
+	// resources for worker pods
+	// +optional
+	Resources *ResourceRequirements `json:"resources,omitempty"`
+}
+
+// ResourceRequirements defines resource requests and limits
+type ResourceRequirements struct {
+	// requests describes the minimum resources required
+	// +optional
+	Requests map[string]string `json:"requests,omitempty"`
+
+	// limits describes the maximum resources allowed
+	// +optional
+	Limits map[string]string `json:"limits,omitempty"`
+}
+
+// StorageSpec defines storage configuration
+type StorageSpec struct {
+	// storageClass for PVC
+	// +kubebuilder:default="local-path"
+	// +optional
+	StorageClass string `json:"storageClass,omitempty"`
+
+	// size of the persistent volume
+	// +kubebuilder:default="5Gi"
+	// +optional
+	Size string `json:"size,omitempty"`
+
+	// hostPath base directory for cluster data
+	// +kubebuilder:default="/home/raghav/klone"
+	// +optional
+	HostPath string `json:"hostPath,omitempty"`
+
+	// nodeAffinity for PV binding
+	// +optional
+	NodeAffinity *NodeAffinitySpec `json:"nodeAffinity,omitempty"`
+}
+
+// NodeAffinitySpec defines node affinity for storage
+type NodeAffinitySpec struct {
+	// enabled determines if node affinity is used
+	// +kubebuilder:default=false
+	// +optional
+	Enabled bool `json:"enabled,omitempty"`
+
+	// label is the node label key for affinity (e.g., workload=primary)
+	// +kubebuilder:default="primary"
+	// +optional
+	Label string `json:"label,omitempty"`
+}
+
+// TerminalSpec defines web terminal configuration
+type TerminalSpec struct {
+	// image for the terminal container
+	// +kubebuilder:default="alpine:3.19"
+	// +optional
+	Image string `json:"image,omitempty"`
+
+	// replicas is the number of terminal instances
+	// +kubebuilder:default=1
+	// +optional
+	Replicas int32 `json:"replicas,omitempty"`
+
+	// resources for terminal pod
+	// +optional
+	Resources *ResourceRequirements `json:"resources,omitempty"`
+}
+
+// IngressSpec defines ingress configuration
+type IngressSpec struct {
+	// type of ingress: tailscale, loadbalancer, or none
+	// +kubebuilder:validation:Enum=tailscale;loadbalancer;none
+	// +kubebuilder:default="tailscale"
+	// +optional
+	Type string `json:"type,omitempty"`
+
+	// tailscale specific configuration
+	// +optional
+	Tailscale *TailscaleIngressSpec `json:"tailscale,omitempty"`
+
+	// loadBalancer specific configuration
+	// +optional
+	LoadBalancer *LoadBalancerIngressSpec `json:"loadBalancer,omitempty"`
+}
+
+// TailscaleIngressSpec defines Tailscale ingress configuration
+type TailscaleIngressSpec struct {
+	// domain is the Tailscale network domain
+	// +optional
+	Domain string `json:"domain,omitempty"`
+
+	// tags for Tailscale device
+	// +optional
+	Tags []string `json:"tags,omitempty"`
+
+	// annotations for the Ingress resource
+	// +optional
+	Annotations map[string]string `json:"annotations,omitempty"`
+}
+
+// LoadBalancerIngressSpec defines AWS ALB ingress configuration
+type LoadBalancerIngressSpec struct {
+	// scheme is the load balancer scheme (internet-facing or internal)
+	// +kubebuilder:validation:Enum=internet-facing;internal
+	// +kubebuilder:default="internet-facing"
+	// +optional
+	Scheme string `json:"scheme,omitempty"`
+
+	// certificateArn for HTTPS listener
+	// +optional
+	CertificateArn string `json:"certificateArn,omitempty"`
+
+	// externalDNS configuration
+	// +optional
+	ExternalDNS *ExternalDNSSpec `json:"externalDNS,omitempty"`
+
+	// annotations for the Ingress resource
+	// +optional
+	Annotations map[string]string `json:"annotations,omitempty"`
+}
+
+// ExternalDNSSpec defines external-dns configuration
+type ExternalDNSSpec struct {
+	// hostname for DNS record
+	// +optional
+	Hostname string `json:"hostname,omitempty"`
+
+	// ttl for DNS record
+	// +kubebuilder:default=300
+	// +optional
+	TTL int32 `json:"ttl,omitempty"`
+}
+
+// NetworkingSpec defines network configuration
+type NetworkingSpec struct {
+	// clusterCIDR for pod network (auto-generated if empty)
+	// +optional
+	ClusterCIDR string `json:"clusterCIDR,omitempty"`
+
+	// serviceCIDR for service network (auto-generated if empty)
+	// +optional
+	ServiceCIDR string `json:"serviceCIDR,omitempty"`
+}
+
+// MetricsServerSpec defines metrics-server auto-install configuration
+type MetricsServerSpec struct {
+	// enabled determines if metrics-server should be auto-installed
+	// +kubebuilder:default=true
+	// +optional
+	Enabled bool `json:"enabled,omitempty"`
+
+	// image for metrics-server
+	// +kubebuilder:default="registry.k8s.io/metrics-server/metrics-server:v0.7.0"
+	// +optional
+	Image string `json:"image,omitempty"`
 }
 
 // KloneClusterStatus defines the observed state of KloneCluster.
 type KloneClusterStatus struct {
-	// INSERT ADDITIONAL STATUS FIELD - define observed state of cluster
-	// Important: Run "make" to regenerate code after modifying this file
-
-	// For Kubernetes API conventions, see:
-	// https://github.com/kubernetes/community/blob/master/contributors/devel/sig-architecture/api-conventions.md#typical-status-properties
+	// phase represents the current lifecycle phase of the cluster
+	// +kubebuilder:validation:Enum=Creating;Running;Terminating;Failed
+	// +optional
+	Phase string `json:"phase,omitempty"`
 
 	// conditions represent the current state of the KloneCluster resource.
-	// Each condition has a unique type and reflects the status of a specific aspect of the resource.
-	//
-	// Standard condition types include:
-	// - "Available": the resource is fully functional
-	// - "Progressing": the resource is being created or updated
-	// - "Degraded": the resource failed to reach or maintain its desired state
-	//
-	// The status of each condition is one of True, False, or Unknown.
+	// Condition types:
+	// - "Ready": all components are running and healthy
+	// - "TerminalReady": terminal pod is ready and accessible
+	// - "IngressReady": ingress is configured and accessible
 	// +listType=map
 	// +listMapKey=type
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
+
+	// workloads tracks the status of created workloads
+	// +optional
+	Workloads []WorkloadStatus `json:"workloads,omitempty"`
+
+	// ingressURL is the URL to access the cluster terminal
+	// +optional
+	IngressURL string `json:"ingressURL,omitempty"`
+
+	// loadBalancerHostname is the hostname of the load balancer (if using ALB)
+	// +optional
+	LoadBalancerHostname string `json:"loadBalancerHostname,omitempty"`
+
+	// namespace is the namespace where cluster resources are deployed
+	// +optional
+	Namespace string `json:"namespace,omitempty"`
+
+	// persistentVolume is the name of the PV created for this cluster
+	// +optional
+	PersistentVolume string `json:"persistentVolume,omitempty"`
+
+	// metricsServerInstalled indicates if metrics-server was successfully installed
+	// +optional
+	MetricsServerInstalled bool `json:"metricsServerInstalled,omitempty"`
+
+	// clusterCIDR is the actual CIDR assigned to the cluster
+	// +optional
+	ClusterCIDR string `json:"clusterCIDR,omitempty"`
+
+	// serviceCIDR is the actual CIDR assigned for services
+	// +optional
+	ServiceCIDR string `json:"serviceCIDR,omitempty"`
+}
+
+// WorkloadStatus represents the status of a workload
+type WorkloadStatus struct {
+	// kind is the workload kind (StatefulSet or Deployment)
+	// +optional
+	Kind string `json:"kind,omitempty"`
+
+	// name is the workload name
+	// +optional
+	Name string `json:"name,omitempty"`
+
+	// ready is the number of ready replicas
+	// +optional
+	Ready int32 `json:"ready,omitempty"`
+
+	// desired is the desired number of replicas
+	// +optional
+	Desired int32 `json:"desired,omitempty"`
 }
 
 // +kubebuilder:object:root=true
