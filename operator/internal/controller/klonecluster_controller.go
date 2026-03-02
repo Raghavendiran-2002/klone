@@ -108,6 +108,11 @@ func (r *KloneClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		}
 	}
 
+	// Handle restart annotation
+	if err := r.handleRestartAnnotation(ctx, cluster); err != nil {
+		log.Error(err, "Failed to handle restart annotation")
+	}
+
 	// Reconcile all resources
 	if err := r.reconcileResources(ctx, cluster); err != nil {
 		log.Error(err, "Failed to reconcile resources")

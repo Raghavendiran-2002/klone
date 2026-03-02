@@ -48,14 +48,27 @@ Converting Klone from Python FastAPI to Kubernetes Operator using Kubebuilder.
   - [x] Update ingress URL based on type
 - [x] Comprehensive RBAC markers for all resources
 
-### Phase 4: Testing & Deployment
-- [ ] Generate manifests and RBAC
-- [ ] Build operator binary
-- [ ] Test locally with `make run`
-- [ ] Build and push Docker image
-- [ ] Deploy to cluster
-- [ ] Create test KloneCluster CR
+### Phase 4: Advanced Features (Completed)
+- [x] Restart annotation support:
+  - Annotation: `klone.io/restart-requested`
+  - Restarts all workloads (control-plane, workers, terminal)
+  - Tracks applied restarts to avoid loops
+- [x] Background cleanup controller:
+  - Runs every 30s
+  - Cleans up stuck Terminating namespaces
+  - Re-clears finalizers for namespaces stuck > 2 minutes
+  - Handles Tailscale operator finalizer conflicts
+
+### Phase 5: Testing & Deployment
+- [x] Generate manifests and RBAC
+- [x] Build operator binary
+- [x] Build and push Docker image (v1.0.0)
+- [x] Deploy to cluster (operator-system namespace)
+- [x] Create test KloneCluster CR
+- [ ] Fix terminal pod issue (ttyd download)
+- [ ] Rebuild and redeploy (v1.0.1)
 - [ ] Verify end-to-end functionality
+- [ ] Test cluster deletion and finalizer cleanup
 
 ## Pending Tasks 📋
 

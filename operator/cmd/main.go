@@ -185,6 +185,14 @@ func main() {
 		setupLog.Error(err, "Failed to create controller", "controller", "KloneCluster")
 		os.Exit(1)
 	}
+
+	// Setup background cleanup controller
+	if err := controller.SetupCleanupController(mgr); err != nil {
+		setupLog.Error(err, "Failed to setup cleanup controller")
+		os.Exit(1)
+	}
+	setupLog.Info("Cleanup controller started")
+
 	// +kubebuilder:scaffold:builder
 
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
