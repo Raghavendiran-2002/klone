@@ -1,0 +1,55 @@
+apiVersion: klone.klone.io/v1alpha1
+kind: KloneCluster
+metadata:
+  labels:
+    app.kubernetes.io/name: operator
+    app.kubernetes.io/managed-by: kustomize
+  name: dev-cluster
+spec:
+  k3s:
+    image: rancher/k3s:v1.35.1-k3s1
+    token: supersecrettoken123
+    controlPlane:
+      replicas: 1
+      resources:
+        requests:
+          cpu: "500m"
+          memory: "512Mi"
+        limits:
+          cpu: "2000m"
+          memory: "1Gi"
+    worker:
+      replicas: 2
+      resources:
+        requests:
+          cpu: "200m"
+          memory: "256Mi"
+
+  storage:
+    storageClass: local-path
+    size: 5Gi
+    hostPath: /home/raghav/klone
+    nodeAffinity:
+      enabled: false
+      label: primary
+
+  terminal:
+    image: alpine:3.19
+    replicas: 1
+
+  ingress:
+    type: tailscale
+    tailscale:
+      domain: taile3ca5.ts.net
+      tags:
+        - tag:k8s-operator
+        - tag:k8s
+
+  networking:
+    # Leave empty for auto-generation based on cluster name
+    clusterCIDR: ""
+    serviceCIDR: ""
+
+  metricsServer:
+    enabled: true
+    image: registry.k8s.io/metrics-server/metrics-server:v0.7.0

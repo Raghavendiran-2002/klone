@@ -1,0 +1,39 @@
+apiVersion: klone.klone.io/v1alpha1
+kind: KloneCluster
+metadata:
+  labels:
+    app.kubernetes.io/name: operator
+    app.kubernetes.io/managed-by: kustomize
+  name: prod-cluster
+spec:
+  k3s:
+    image: rancher/k3s:v1.35.1-k3s1
+    token: supersecrettoken123
+    controlPlane:
+      replicas: 1
+    worker:
+      replicas: 3
+
+  storage:
+    storageClass: gp3
+    size: 10Gi
+    hostPath: /mnt/klone
+
+  terminal:
+    image: alpine:3.19
+    replicas: 1
+
+  ingress:
+    type: loadbalancer
+    loadBalancer:
+      scheme: internet-facing
+      certificateArn: arn:aws:acm:us-east-1:123456789012:certificate/abcd-1234
+      externalDNS:
+        hostname: prod-cluster.example.com
+        ttl: 300
+      annotations:
+        alb.ingress.kubernetes.io/target-type: ip
+        alb.ingress.kubernetes.io/listen-ports: '[{"HTTPS":443}]'
+
+  metricsServer:
+    enabled: true
