@@ -1,0 +1,72 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: operator-system
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: klone-dashboard
+  namespace: operator-system
+  labels:
+    app: klone-dashboard
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: klone-dashboard
+  template:
+    metadata:
+      labels:
+        app: klone-dashboard
+    spec:
+      serviceAccountName: operator-controller-manager
+      containers:
+      - name: dashboard
+        image: raghavendiran2002/klone-dashboard:v1.0.0
+        ports:
+        - containerPort: 8080
+          name: http
+        env:
+        - name: PORT
+          value: "8080"
+        resources:
+          limits:
+            cpu: 500m
+            memory: 256Mi
+          requests:
+            cpu: 100m
+            memory: 128Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: klone-dashboard
+  namespace: operator-system
+  labels:
+    app: klone-dashboard
+spec:
+  type: ClusterIP
+  selector:
+    app: klone-dashboard
+  ports:
+  - port: 80
+    targetPort: http
+    protocol: TCP
+    name: http
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: klone-dashboard
+  namespace: operator-system
+spec:
+  ingressClassName: tailscale
+  defaultBackend:
+    service:
+      name: klone-dashboard
+      port:
+        name: http
+  tls:
+  - hosts:
+    - klone-dashboard

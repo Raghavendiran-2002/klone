@@ -2,6 +2,13 @@ FROM golang:1.25 as builder
 
 WORKDIR /workspace
 
+# Copy go mod files
+COPY go.mod go.mod
+COPY go.sum go.sum
+
+# Download dependencies
+RUN go mod download
+
 # Copy the api module
 COPY api/ api/
 

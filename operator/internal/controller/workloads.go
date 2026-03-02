@@ -42,7 +42,7 @@ func BuildControlPlaneStatefulSet(cluster *klonev1alpha1.KloneCluster) *appsv1.S
 		"server",
 		fmt.Sprintf("--cluster-cidr=%s", clusterCIDR),
 		fmt.Sprintf("--service-cidr=%s", serviceCIDR),
-		"--flannel-backend=host-gw",
+		"--flannel-backend=vxlan",
 		"--disable=traefik",
 		"--disable=servicelb",
 		"--disable=local-storage",
@@ -246,10 +246,20 @@ CACHE=/k3s/term-cache
 # Install dependencies
 apk add --no-cache curl bash
 
+# Detect architecture
+ARCH=$(uname -m)
+if [ "$ARCH" = "aarch64" ]; then
+  KUBECTL_ARCH="arm64"
+  TTYD_ARCH="aarch64"
+else
+  KUBECTL_ARCH="amd64"
+  TTYD_ARCH="x86_64"
+fi
+
 # Cache kubectl
 if [ ! -x "$CACHE/kubectl" ]; then
   echo "Caching kubectl (first run)..."
-  curl -Lo $CACHE/kubectl https://dl.k8s.io/release/v1.35.0/bin/linux/amd64/kubectl
+  curl -Lo $CACHE/kubectl https://dl.k8s.io/release/v1.35.0/bin/linux/${KUBECTL_ARCH}/kubectl
   chmod +x $CACHE/kubectl
 fi
 ln -sf $CACHE/kubectl /usr/local/bin/kubectl
@@ -257,17 +267,10 @@ ln -sf $CACHE/kubectl /usr/local/bin/kubectl
 # Cache ttyd
 if [ ! -x "$CACHE/ttyd" ]; then
   echo "Caching ttyd (first run)..."
-  wget -O $CACHE/ttyd https://github.com/tsl0922/ttyd/releases/download/1.7.7/ttyd.x86_64
+  curl -Lo $CACHE/ttyd https://github.com/tsl0922/ttyd/releases/download/1.7.7/ttyd.${TTYD_ARCH}
   chmod +x $CACHE/ttyd
 fi
 ln -sf $CACHE/ttyd /usr/local/bin/ttyd
-
-# Cache bash package
-if [ ! -f "$CACHE/bash.apk" ]; then
-  echo "Caching bash package..."
-  apk fetch bash -o $CACHE
-  mv $CACHE/bash-*.apk $CACHE/bash.apk 2>/dev/null || true
-fi
 
 # Configure kubectl context
 export KUBECONFIG=/var/lib/rancher/k3s/kubeconfig.yaml
