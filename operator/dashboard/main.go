@@ -6,8 +6,11 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/http/httputil"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 
 	klonev1alpha1 "github.com/klone/operator/api/v1alpha1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -37,6 +40,7 @@ func main() {
 	http.HandleFunc("/", serveIndex)
 	http.HandleFunc("/api/clusters", listClusters)
 	http.HandleFunc("/api/clusters/", getCluster)
+	http.HandleFunc("/api/terminal/", proxyTerminal)
 
 	port := os.Getenv("PORT")
 	if port == "" {
@@ -113,6 +117,54 @@ func getCluster(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(cluster)
+}
+
+func proxyTerminal(w http.ResponseWriter, r *http.Request) {
+	// Extract cluster name from path: /api/terminal/{name}/...
+	pathParts := strings.Split(strings.TrimPrefix(r.URL.Path, "/api/terminal/"), "/")
+	if len(pathParts) == 0 || pathParts[0] == "" {
+		http.Error(w, "Cluster name required", http.StatusBadRequest)
+		return
+	}
+
+	clusterName := pathParts[0]
+	ctx := context.Background()
+
+	// Get cluster to find namespace
+	cluster := &klonev1alpha1.KloneCluster{}
+	if err := k8sClient.Get(ctx, client.ObjectKey{
+		Name:      clusterName,
+		Namespace: "default",
+	}, cluster); err != nil {
+		http.Error(w, fmt.Sprintf("Cluster not found: %v", err), http.StatusNotFound)
+		return
+	}
+
+	namespace := cluster.Status.Namespace
+	if namespace == "" {
+		namespace = clusterName
+	}
+
+	// Forward request to terminal service
+	targetURL := fmt.Sprintf("http://klone-terminal.%s.svc.cluster.local", namespace)
+
+	// Create reverse proxy
+	target, err := url.Parse(targetURL)
+	if err != nil {
+		http.Error(w, "Failed to parse target URL", http.StatusInternalServerError)
+		return
+	}
+
+	proxy := httputil.NewSingleHostReverseProxy(target)
+	proxy.Director = func(req *http.Request) {
+		req.Header = r.Header
+		req.Host = target.Host
+		req.URL.Scheme = target.Scheme
+		req.URL.Host = target.Host
+		req.URL.Path = "/"
+	}
+
+	proxy.ServeHTTP(w, r)
 }
 
 func getIndexHTML() string {
@@ -293,6 +345,58 @@ func getIndexHTML() string {
         .empty-state-text {
             color: #718096;
         }
+        .connect-btn {
+            background: #667eea;
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 6px;
+            font-size: 13px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background 0.2s;
+            margin-top: 16px;
+        }
+        .connect-btn:hover {
+            background: #5568d3;
+        }
+        .modal {
+            display: none;
+            position: fixed;
+            z-index: 1000;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0,0,0,0.8);
+        }
+        .modal-content {
+            position: relative;
+            margin: 2% auto;
+            width: 95%;
+            height: 90%;
+            background: #1e1e1e;
+            border-radius: 8px;
+            overflow: hidden;
+        }
+        .close-modal {
+            position: absolute;
+            top: 10px;
+            right: 20px;
+            color: white;
+            font-size: 32px;
+            font-weight: bold;
+            cursor: pointer;
+            z-index: 1001;
+        }
+        .close-modal:hover {
+            color: #f00;
+        }
+        .terminal-iframe {
+            width: 100%;
+            height: 100%;
+            border: none;
+        }
     </style>
 </head>
 <body>
@@ -326,6 +430,14 @@ func getIndexHTML() string {
                 <div class="spinner"></div>
                 <div>Loading clusters...</div>
             </div>
+        </div>
+    </div>
+
+    <!-- Terminal Modal -->
+    <div id="terminalModal" class="modal">
+        <div class="modal-content">
+            <span class="close-modal" onclick="closeTerminal()">&times;</span>
+            <iframe id="terminalIframe" class="terminal-iframe"></iframe>
         </div>
     </div>
 
@@ -373,6 +485,8 @@ func getIndexHTML() string {
                 const phase = status.phase || 'Unknown';
                 const workloads = status.workloads || [];
 
+                const terminalReady = status.conditions?.find(c => c.type === 'TerminalReady' && c.status === 'True');
+
                 return '<div class="cluster-card">' +
                     '<div class="cluster-header">' +
                     '<div class="cluster-name">' + cluster.metadata.name + '</div>' +
@@ -393,11 +507,34 @@ func getIndexHTML() string {
                             '</div>';
                     }).join('') +
                     '</div>' : '') +
+                    (terminalReady ? '<button class="connect-btn" onclick="connectTerminal(\'' + cluster.metadata.name + '\')">🖥️ Connect Terminal</button>' : '') +
                     '</div>';
             }).join('');
 
             container.innerHTML = '<div class="clusters-grid">' + html + '</div>';
         }
+
+        // Terminal functions
+        function connectTerminal(clusterName) {
+            const modal = document.getElementById('terminalModal');
+            const iframe = document.getElementById('terminalIframe');
+            iframe.src = '/api/terminal/' + clusterName + '/';
+            modal.style.display = 'block';
+        }
+
+        function closeTerminal() {
+            const modal = document.getElementById('terminalModal');
+            const iframe = document.getElementById('terminalIframe');
+            modal.style.display = 'none';
+            iframe.src = '';
+        }
+
+        // Close modal on escape key
+        document.addEventListener('keydown', function(event) {
+            if (event.key === 'Escape') {
+                closeTerminal();
+            }
+        });
 
         // Initial load
         loadClusters();
