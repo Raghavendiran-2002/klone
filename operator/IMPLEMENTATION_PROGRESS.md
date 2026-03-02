@@ -31,23 +31,31 @@ Converting Klone from Python FastAPI to Kubernetes Operator using Kubebuilder.
 ## In Progress 🔨
 
 ### Phase 3: Controller Implementation
-- [x] Resource builders created:
-  - [x] Namespace creation
-  - [x] PersistentVolume creation (with optional node affinity)
-  - [x] PersistentVolumeClaim creation
-  - [x] Services creation (headless control-plane, ClusterIP terminal)
-  - [x] K3s control plane StatefulSet
-  - [x] K3s worker Deployment
-  - [x] Terminal Deployment with caching logic (kubectl, ttyd, bash)
-  - [x] Ingress handlers:
-    - [x] Tailscale ingress
-    - [x] AWS ALB ingress
-    - [x] None (no ingress)
-  - [x] CIDR allocation utility (MD5-based)
-- [ ] Main reconciliation loop
-- [ ] Finalizer and cleanup logic
-- [ ] Status update logic
-- [ ] Restart annotation support
+- [x] Resource builders created
+- [x] Main reconciliation loop implemented:
+  - [x] Resource creation/update logic
+  - [x] CIDR allocation on first reconcile
+  - [x] Finalizer handling (add on create)
+  - [x] Requeue every 30s for status checks
+- [x] Finalizer and cleanup logic:
+  - [x] Clear finalizers from Ingresses, Secrets, StatefulSets, Deployments, PVCs
+  - [x] Delete PV and Namespace
+  - [x] Handle Tailscale operator finalizer conflicts
+- [x] Status update logic:
+  - [x] Track workload readiness (control-plane, workers, terminal)
+  - [x] Update conditions (Ready, TerminalReady)
+  - [x] Set phase (Creating, Running, Terminating, Failed)
+  - [x] Update ingress URL based on type
+- [x] Comprehensive RBAC markers for all resources
+
+### Phase 4: Testing & Deployment
+- [ ] Generate manifests and RBAC
+- [ ] Build operator binary
+- [ ] Test locally with `make run`
+- [ ] Build and push Docker image
+- [ ] Deploy to cluster
+- [ ] Create test KloneCluster CR
+- [ ] Verify end-to-end functionality
 
 ## Pending Tasks 📋
 
