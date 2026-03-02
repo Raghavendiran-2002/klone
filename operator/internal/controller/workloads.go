@@ -74,22 +74,6 @@ func BuildControlPlaneStatefulSet(cluster *klonev1alpha1.KloneCluster) *appsv1.S
 					},
 				},
 				Spec: corev1.PodSpec{
-					InitContainers: []corev1.Container{
-						{
-							Name:    "clear-etcd",
-							Image:   "busybox:1.36",
-							Command: []string{"sh", "-c"},
-							Args: []string{
-								"rm -rf /var/lib/rancher/k3s/server/db/etcd",
-							},
-							VolumeMounts: []corev1.VolumeMount{
-								{
-									Name:      "k3s-data",
-									MountPath: "/var/lib/rancher/k3s",
-								},
-							},
-						},
-					},
 					Containers: []corev1.Container{
 						{
 							Name:  "k3s",
@@ -277,15 +261,18 @@ if [ ! -x "$CACHE/ttyd" ]; then
 fi
 ln -sf $CACHE/ttyd /usr/local/bin/ttyd
 
-# Configure kubectl to use k3s cluster
-export KUBECONFIG=/shared/kubeconfig.yaml
-echo "Using kubeconfig from /shared/kubeconfig.yaml"
+# Configure kubectl to use k3s cluster - copy to default location
+mkdir -p ~/.kube
+cp /shared/kubeconfig.yaml ~/.kube/config
+chmod 600 ~/.kube/config
+export KUBECONFIG=~/.kube/config
+echo "Kubeconfig copied to ~/.kube/config"
 
 # Wait for k3s API to be ready (simple connectivity check)
 echo "Waiting for k3s API server..."
 max_attempts=30
 attempt=0
-until curl -k -s https://k3s-control-plane:6443/healthz > /dev/null 2>&1; do
+until curl -k -s https://k3s-control-plane.` + namespaceName + `.svc.cluster.local:6443/healthz > /dev/null 2>&1; do
   attempt=$((attempt + 1))
   if [ $attempt -ge $max_attempts ]; then
     echo "Warning: k3s API server not responding, but starting terminal anyway"
@@ -295,11 +282,12 @@ until curl -k -s https://k3s-control-plane:6443/healthz > /dev/null 2>&1; do
 done
 echo "k3s API server is ready!"
 
-# Set KUBECONFIG in .bashrc so it persists in terminal sessions
-echo "export KUBECONFIG=/shared/kubeconfig.yaml" >> ~/.bashrc
+# Set KUBECONFIG and alias in .bashrc so they persist in terminal sessions
+echo "export KUBECONFIG=~/.kube/config" >> ~/.bashrc
+echo "alias k=kubectl" >> ~/.bashrc
 
 echo "Terminal ready! Access via ttyd on port 80"
-echo "Try 'kubectl get nodes' to interact with the nested k3s cluster"
+echo "Try 'kubectl get nodes' or 'k get nodes' to interact with the nested k3s cluster"
 exec ttyd -p 80 -W bash
 `
 
@@ -326,27 +314,50 @@ exec ttyd -p 80 -W bash
 					},
 				},
 				Spec: corev1.PodSpec{
+					AutomountServiceAccountToken: boolPtr(false),
+					// Ensure terminal is scheduled on same node as control plane (for hostPath PVC access)
+					Affinity: &corev1.Affinity{
+						PodAffinity: &corev1.PodAffinity{
+							RequiredDuringSchedulingIgnoredDuringExecution: []corev1.PodAffinityTerm{
+								{
+									LabelSelector: &metav1.LabelSelector{
+										MatchLabels: map[string]string{
+											"app": "k3s-control-plane",
+										},
+									},
+									TopologyKey: "kubernetes.io/hostname",
+								},
+							},
+						},
+					},
 					InitContainers: []corev1.Container{
 						{
 							Name:    "setup-kubeconfig",
 							Image:   image,
 							Command: []string{"/bin/sh", "-c"},
-							Args: []string{`
+							Args: []string{fmt.Sprintf(`
 set -e
 apk add --no-cache sed
-# Wait for kubeconfig to be available
+# Wait for kubeconfig to be available and freshly generated
 echo "Waiting for kubeconfig..."
 while [ ! -f /k3s-config/kubeconfig.yaml ]; do
   sleep 2
 done
 
-# Copy kubeconfig to shared volume and modify server URL
+# Wait for k3s to finish writing kubeconfig with fresh certificates
+echo "Waiting for k3s to finish writing kubeconfig..."
+sleep 15
+
+# Copy kubeconfig to shared volume and modify for service access
 cp /k3s-config/kubeconfig.yaml /shared/kubeconfig.yaml
-sed -i 's|https://127.0.0.1:6443|https://k3s-control-plane:6443|g' /shared/kubeconfig.yaml
-# Add insecure-skip-tls-verify
-sed -i '/server: https:\/\/k3s-control-plane:6443/a\    insecure-skip-tls-verify: true' /shared/kubeconfig.yaml
+# Replace server URL from 127.0.0.1 to fully qualified service DNS name
+sed -i 's|https://127.0.0.1:6443|https://k3s-control-plane.%s.svc.cluster.local:6443|g' /shared/kubeconfig.yaml
+# Remove certificate-authority-data line
+sed -i '/certificate-authority-data:/d' /shared/kubeconfig.yaml
+# Add insecure-skip-tls-verify after server line
+sed -i '/server: https:\/\/k3s-control-plane.%s.svc.cluster.local:6443/a\    insecure-skip-tls-verify: true' /shared/kubeconfig.yaml
 echo "Kubeconfig ready!"
-`},
+`, namespaceName, namespaceName)},
 							VolumeMounts: []corev1.VolumeMount{
 								{
 									Name:      "k3s-data",

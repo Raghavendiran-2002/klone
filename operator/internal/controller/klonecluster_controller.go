@@ -22,6 +22,7 @@ import (
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -61,6 +62,7 @@ type KloneClusterReconciler struct {
 // Workloads
 // +kubebuilder:rbac:groups=apps,resources=statefulsets,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=batch,resources=jobs,verbs=get;list;watch;create;update;patch;delete
 
 // Networking
 // +kubebuilder:rbac:groups=networking.k8s.io,resources=ingresses,verbs=get;list;watch;create;update;patch;delete
@@ -188,12 +190,31 @@ func (r *KloneClusterReconciler) reconcileResources(ctx context.Context, cluster
 	}
 	log.Info("Reconciled worker Deployment", "namespace", namespaceName, "name", workerDep.Name)
 
-	// 7. Reconcile Terminal Deployment
-	terminalDep := BuildTerminalDeployment(cluster)
-	if err := r.createOrUpdate(ctx, terminalDep); err != nil {
-		return fmt.Errorf("failed to reconcile terminal: %w", err)
+	// 7. Check if control plane and workers are ready before deploying terminal
+	controlPlaneReady, err := r.isStatefulSetReady(ctx, namespaceName, GetControlPlaneStatefulSetName())
+	if err != nil {
+		log.Info("Control plane not ready yet, waiting...", "error", err)
+		return nil
 	}
-	log.Info("Reconciled terminal Deployment", "namespace", namespaceName, "name", terminalDep.Name)
+
+	workerReady, err := r.isDeploymentReady(ctx, namespaceName, GetWorkerDeploymentName())
+	if err != nil {
+		log.Info("Workers not ready yet, waiting...", "error", err)
+		return nil
+	}
+
+	// Only deploy terminal if control plane and workers are ready
+	if controlPlaneReady && workerReady {
+		log.Info("Control plane and workers are ready, deploying terminal")
+		terminalDep := BuildTerminalDeployment(cluster)
+		if err := r.createOrUpdate(ctx, terminalDep); err != nil {
+			return fmt.Errorf("failed to reconcile terminal: %w", err)
+		}
+		log.Info("Reconciled terminal Deployment", "namespace", namespaceName, "name", terminalDep.Name)
+	} else {
+		log.Info("Waiting for control plane and workers to be ready before deploying terminal",
+			"controlPlaneReady", controlPlaneReady, "workerReady", workerReady)
+	}
 
 	// 8. Reconcile Ingress (if configured)
 	ingress := BuildIngress(cluster)
@@ -240,6 +261,42 @@ func (r *KloneClusterReconciler) createOrUpdatePV(ctx context.Context, pv *corev
 	// PV exists, update if needed
 	pv.SetResourceVersion(existing.GetResourceVersion())
 	return r.Update(ctx, pv)
+}
+
+// isStatefulSetReady checks if a StatefulSet has all replicas ready
+func (r *KloneClusterReconciler) isStatefulSetReady(ctx context.Context, namespace, name string) (bool, error) {
+	ss := &appsv1.StatefulSet{}
+	if err := r.Get(ctx, types.NamespacedName{
+		Name:      name,
+		Namespace: namespace,
+	}, ss); err != nil {
+		return false, err
+	}
+
+	// Check if replicas are defined and ready
+	if ss.Spec.Replicas == nil {
+		return false, fmt.Errorf("replicas not defined")
+	}
+
+	return ss.Status.ReadyReplicas == *ss.Spec.Replicas && *ss.Spec.Replicas > 0, nil
+}
+
+// isDeploymentReady checks if a Deployment has all replicas ready
+func (r *KloneClusterReconciler) isDeploymentReady(ctx context.Context, namespace, name string) (bool, error) {
+	dep := &appsv1.Deployment{}
+	if err := r.Get(ctx, types.NamespacedName{
+		Name:      name,
+		Namespace: namespace,
+	}, dep); err != nil {
+		return false, err
+	}
+
+	// Check if replicas are defined and ready
+	if dep.Spec.Replicas == nil {
+		return false, fmt.Errorf("replicas not defined")
+	}
+
+	return dep.Status.ReadyReplicas == *dep.Spec.Replicas, nil
 }
 
 // updateStatus updates the KloneCluster status based on actual resource state
@@ -398,6 +455,11 @@ func (r *KloneClusterReconciler) handleDeletion(ctx context.Context, cluster *kl
 			log.Error(err, "Failed to clear namespace finalizers")
 		}
 
+		// Clean up hostPath directory before deleting PV
+		if err := r.cleanupHostPath(ctx, cluster); err != nil {
+			log.Error(err, "Failed to cleanup hostPath directory")
+		}
+
 		// Delete PersistentVolume
 		pv := &corev1.PersistentVolume{}
 		pvName := GetPVName(cluster.Name)
@@ -425,6 +487,103 @@ func (r *KloneClusterReconciler) handleDeletion(ctx context.Context, cluster *kl
 	}
 
 	return ctrl.Result{}, nil
+}
+
+// cleanupHostPath cleans up the hostPath directory for the cluster
+func (r *KloneClusterReconciler) cleanupHostPath(ctx context.Context, cluster *klonev1alpha1.KloneCluster) error {
+	log := logf.FromContext(ctx)
+
+	// Get storage configuration
+	hostPathBase := "/tmp/klone"
+	if cluster.Spec.Storage.HostPath != "" {
+		hostPathBase = cluster.Spec.Storage.HostPath
+	}
+	hostPath := fmt.Sprintf("%s/%s", hostPathBase, cluster.Name)
+
+	// Get node selector for cleanup job (match the PV node affinity)
+	nodeSelector := map[string]string{}
+	if cluster.Spec.Storage.NodeAffinity != nil && cluster.Spec.Storage.NodeAffinity.Enabled {
+		label := cluster.Spec.Storage.NodeAffinity.Label
+		if label == "" {
+			label = "primary"
+		}
+		nodeSelector["workload"] = label
+	}
+
+	log.Info("Creating cleanup job for hostPath", "path", hostPath)
+
+	// Create cleanup job
+	job := &batchv1.Job{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      fmt.Sprintf("cleanup-%s", cluster.Name),
+			Namespace: "operator-system",
+		},
+		Spec: batchv1.JobSpec{
+			TTLSecondsAfterFinished: int32Ptr(10),
+			Template: corev1.PodTemplateSpec{
+				Spec: corev1.PodSpec{
+					NodeSelector:  nodeSelector,
+					RestartPolicy: corev1.RestartPolicyNever,
+					Containers: []corev1.Container{
+						{
+							Name:    "cleanup",
+							Image:   "busybox:1.36",
+							Command: []string{"sh", "-c"},
+							Args: []string{
+								fmt.Sprintf("rm -rf /host%s && echo 'Cleanup complete for %s'", hostPath, hostPath),
+							},
+							VolumeMounts: []corev1.VolumeMount{
+								{
+									Name:      "host-root",
+									MountPath: "/host",
+								},
+							},
+						},
+					},
+					Volumes: []corev1.Volume{
+						{
+							Name: "host-root",
+							VolumeSource: corev1.VolumeSource{
+								HostPath: &corev1.HostPathVolumeSource{
+									Path: "/",
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	// Create the job
+	if err := r.Create(ctx, job); err != nil && !apierrors.IsAlreadyExists(err) {
+		return fmt.Errorf("failed to create cleanup job: %w", err)
+	}
+
+	// Wait for job to complete (with timeout)
+	for i := 0; i < 30; i++ {
+		time.Sleep(1 * time.Second)
+
+		if err := r.Get(ctx, types.NamespacedName{
+			Name:      job.Name,
+			Namespace: job.Namespace,
+		}, job); err != nil {
+			continue
+		}
+
+		if job.Status.Succeeded > 0 {
+			log.Info("Cleanup job completed successfully", "path", hostPath)
+			return nil
+		}
+
+		if job.Status.Failed > 0 {
+			log.Error(nil, "Cleanup job failed", "path", hostPath)
+			return fmt.Errorf("cleanup job failed")
+		}
+	}
+
+	log.Info("Cleanup job timed out, continuing with deletion", "path", hostPath)
+	return nil
 }
 
 // clearNamespaceFinalizers clears finalizers from resources in the namespace

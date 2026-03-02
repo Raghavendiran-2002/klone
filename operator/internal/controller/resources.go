@@ -62,7 +62,7 @@ func BuildPersistentVolume(cluster *klonev1alpha1.KloneCluster) *corev1.Persiste
 			},
 			VolumeMode:                    volumeModePtr(corev1.PersistentVolumeFilesystem),
 			AccessModes:                   []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
-			PersistentVolumeReclaimPolicy: corev1.PersistentVolumeReclaimRetain,
+			PersistentVolumeReclaimPolicy: corev1.PersistentVolumeReclaimDelete,
 			StorageClassName:              storageClass,
 			PersistentVolumeSource: corev1.PersistentVolumeSource{
 				HostPath: &corev1.HostPathVolumeSource{
