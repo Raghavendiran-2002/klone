@@ -603,7 +603,7 @@ func (r *KloneClusterReconciler) cleanupHostPath(ctx context.Context, cluster *k
 	job := &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      fmt.Sprintf("cleanup-%s", cluster.Name),
-			Namespace: "operator-system",
+			Namespace: "klone",
 		},
 		Spec: batchv1.JobSpec{
 			TTLSecondsAfterFinished: int32Ptr(10),
