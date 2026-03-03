@@ -1,13 +1,13 @@
 apiVersion: v1
 kind: Namespace
 metadata:
-  name: operator-system
+  name: klone
 ---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: klone-dashboard
-  namespace: operator-system
+  namespace: klone
   labels:
     app: klone-dashboard
 spec:
@@ -20,7 +20,7 @@ spec:
       labels:
         app: klone-dashboard
     spec:
-      serviceAccountName: operator-controller-manager
+      serviceAccountName: klone-controller-manager
       containers:
       - name: dashboard
         image: raghavendiran2002/klone-dashboard:v1.0.0
@@ -42,7 +42,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: klone-dashboard
-  namespace: operator-system
+  namespace: klone
   labels:
     app: klone-dashboard
 spec:
@@ -59,7 +59,7 @@ apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   name: klone-dashboard
-  namespace: operator-system
+  namespace: klone
 spec:
   ingressClassName: tailscale
   defaultBackend:
