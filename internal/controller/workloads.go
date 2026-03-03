@@ -5,6 +5,7 @@ import (
 
 	klonev1alpha1 "github.com/klone/operator/api/v1alpha1"
 	appsv1 "k8s.io/api/apps/v1"
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -458,4 +459,157 @@ func buildResourceRequirements(res *klonev1alpha1.ResourceRequirements) corev1.R
 	}
 
 	return requirements
+}
+
+// BuildArgoCDRegisterJob creates a Job that registers the nested k3s cluster with host ArgoCD
+func BuildArgoCDRegisterJob(cluster *klonev1alpha1.KloneCluster, argoCDNamespace, username, password string) *batchv1.Job {
+	namespaceName := GetNamespaceName(cluster.Name)
+	clusterName := GetClusterRegistrationName(cluster)
+	labels := GetClusterLabels(cluster)
+
+	// Build label arguments for argocd CLI
+	labelArgs := ""
+	for k, v := range labels {
+		labelArgs += fmt.Sprintf(" --label %s=%s", k, v)
+	}
+
+	// Job name
+	jobName := fmt.Sprintf("argocd-register-%s", cluster.Name)
+
+	// TTL for job cleanup (5 minutes after completion)
+	ttl := int32(300)
+
+	// Backoff limit (retry 3 times)
+	backoffLimit := int32(3)
+
+	job := &batchv1.Job{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      jobName,
+			Namespace: namespaceName,
+			Labels: map[string]string{
+				"app":           "argocd-register",
+				"klone-cluster": cluster.Name,
+			},
+		},
+		Spec: batchv1.JobSpec{
+			TTLSecondsAfterFinished: &ttl,
+			BackoffLimit:            &backoffLimit,
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{
+					Labels: map[string]string{
+						"app":           "argocd-register",
+						"klone-cluster": cluster.Name,
+					},
+				},
+				Spec: corev1.PodSpec{
+					ServiceAccountName: "klone-argocd-registration",
+					RestartPolicy:      corev1.RestartPolicyOnFailure,
+					InitContainers: []corev1.Container{
+						{
+							Name:    "extract-kubeconfig",
+							Image:   "bitnami/kubectl:latest",
+							Command: []string{"/bin/sh", "-c"},
+							Args: []string{
+								fmt.Sprintf(`
+set -e
+echo "Extracting kubeconfig from control plane pod..."
+
+# Wait for control plane pod to be ready
+for i in $(seq 1 30); do
+  if kubectl get pod -n %s k3s-control-plane-0 -o jsonpath='{.status.phase}' 2>/dev/null | grep -q Running; then
+    echo "Control plane pod is running"
+    break
+  fi
+  echo "Waiting for control plane pod... ($i/30)"
+  sleep 5
+done
+
+# Extract kubeconfig using kubectl cp
+kubectl cp %s/k3s-control-plane-0:/var/lib/rancher/k3s/kubeconfig.yaml /shared/kubeconfig.yaml
+
+# Replace localhost with service DNS name (sed is pre-installed in bitnami/kubectl)
+sed -i 's|https://127.0.0.1:6443|https://k3s-control-plane.%s.svc.cluster.local:6443|g' /shared/kubeconfig.yaml
+
+# Add insecure-skip-tls-verify (k3s uses self-signed certs)
+sed -i '/server:/a\    insecure-skip-tls-verify: true' /shared/kubeconfig.yaml
+
+# Remove certificate-authority-data
+sed -i '/certificate-authority-data:/d' /shared/kubeconfig.yaml
+
+echo "Kubeconfig extracted and configured successfully"
+`, namespaceName, namespaceName, namespaceName),
+							},
+							VolumeMounts: []corev1.VolumeMount{
+								{
+									Name:      "shared-config",
+									MountPath: "/shared",
+								},
+							},
+						},
+					},
+					Containers: []corev1.Container{
+						{
+							Name:    "argocd-register",
+							Image:   "quay.io/argoproj/argocd:v2.9.3",
+							Command: []string{"/bin/sh", "-c"},
+							Args: []string{
+								fmt.Sprintf(`
+set -e
+
+# Setup kubeconfig for nested cluster
+export KUBECONFIG=/shared/kubeconfig.yaml
+
+# Wait a bit for the nested cluster to stabilize
+echo "Waiting for nested cluster to stabilize..."
+sleep 15
+
+# Login to ArgoCD
+echo "Logging in to ArgoCD..."
+argocd login argocd-server.%s.svc.cluster.local:443 \
+  --username=%s \
+  --password=%s \
+  --insecure
+
+# Register cluster with ArgoCD (argocd cluster add will validate connectivity)
+echo "Registering cluster with ArgoCD..."
+echo "Cluster name: %s"
+echo "Labels: %s"
+
+# The argocd cluster add command will create/update the cluster
+# Using --upsert ensures idempotency
+argocd cluster add default \
+  --name=%s \
+  --kubeconfig=/shared/kubeconfig.yaml \
+  --upsert \
+  --yes%s
+
+echo "Verifying cluster registration..."
+argocd cluster get %s || echo "Warning: Could not verify cluster registration"
+
+echo "ArgoCD registration complete!"
+`, argoCDNamespace, username, password, clusterName, labelArgs, clusterName, labelArgs, clusterName),
+							},
+							VolumeMounts: []corev1.VolumeMount{
+								{
+									Name:      "shared-config",
+									MountPath: "/shared",
+									ReadOnly:  true,
+								},
+							},
+						},
+					},
+					Volumes: []corev1.Volume{
+						{
+							Name: "shared-config",
+							VolumeSource: corev1.VolumeSource{
+								EmptyDir: &corev1.EmptyDirVolumeSource{},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	return job
 }
