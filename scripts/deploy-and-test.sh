@@ -200,30 +200,42 @@ fi
 
 # Step 4: Deploy Dashboard
 print_header "Step 4: Deploying Klone Dashboard"
-print_info "Deploying dashboard to klone namespace..."
 
-if kubectl apply -f config/dashboard/deployment.yaml; then
-    print_success "Dashboard deployed successfully"
+# Check if operator is deployed (dashboard requires operator's ServiceAccount)
+DASHBOARD_DEPLOYED=false
+if kubectl get serviceaccount klone-controller-manager -n klone &> /dev/null; then
+    print_info "Operator ServiceAccount found, deploying dashboard..."
 
-    # Wait for dashboard to be ready
-    print_info "Waiting for dashboard pod to be ready..."
-    if kubectl wait --for=condition=ready pod -l app=klone-dashboard -n klone --timeout=60s 2>/dev/null; then
-        print_success "Dashboard is ready"
+    if kubectl apply -f config/dashboard/deployment.yaml; then
+        print_success "Dashboard deployed successfully"
+        DASHBOARD_DEPLOYED=true
 
-        # Get dashboard service details
-        print_info "Dashboard service details:"
-        kubectl get service klone-dashboard -n klone -o wide
+        # Wait for dashboard to be ready
+        print_info "Waiting for dashboard pod to be ready..."
+        if kubectl wait --for=condition=ready pod -l app=klone-dashboard -n klone --timeout=60s 2>/dev/null; then
+            print_success "Dashboard is ready"
 
-        print_info ""
-        print_info "To access the dashboard locally, run:"
-        echo "  kubectl port-forward -n klone service/klone-dashboard 8080:80"
-        print_info "Then open http://localhost:8080 in your browser"
+            # Get dashboard service details
+            print_info "Dashboard service details:"
+            kubectl get service klone-dashboard -n klone -o wide
+
+            print_info ""
+            print_info "To access the dashboard locally, run:"
+            echo "  kubectl port-forward -n klone service/klone-dashboard 8080:80"
+            print_info "Then open http://localhost:8080 in your browser"
+        else
+            print_warning "Dashboard pod is taking longer than expected to be ready"
+            print_info "Check status with: kubectl get pods -n klone -l app=klone-dashboard"
+        fi
     else
-        print_warning "Dashboard pod is taking longer than expected to be ready"
-        print_info "Check status with: kubectl get pods -n klone -l app=klone-dashboard"
+        print_error "Failed to deploy dashboard"
     fi
 else
-    print_error "Failed to deploy dashboard"
+    print_warning "Operator not deployed yet. Dashboard requires operator's ServiceAccount."
+    print_info "To deploy the dashboard, first deploy the operator:"
+    echo "  IMG=raghavendiran2002/klone-operator:v1.0.25 make deploy"
+    print_info "Then run:"
+    echo "  kubectl apply -f config/dashboard/deployment.yaml"
 fi
 
 echo ""
@@ -231,7 +243,10 @@ echo ""
 # Summary
 print_header "Deployment Complete"
 print_success "CRDs are installed and ready"
-print_success "Dashboard is deployed in klone namespace"
+
+if [ "$DASHBOARD_DEPLOYED" = true ]; then
+    print_success "Dashboard is deployed in klone namespace"
+fi
 
 if [ "$SKIP_TEST" = false ]; then
     print_success "Test cluster '$CLUSTER_NAME' is being provisioned"
