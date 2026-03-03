@@ -10,6 +10,7 @@ rules:
   - namespaces
   - persistentvolumeclaims
   - persistentvolumes
+  - serviceaccounts
   - services
   verbs:
   - create
@@ -105,6 +106,19 @@ rules:
   - networking.k8s.io
   resources:
   - ingresses
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - rbac.authorization.k8s.io
+  resources:
+  - rolebindings
+  - roles
   verbs:
   - create
   - delete

@@ -39,6 +39,33 @@ spec:
           spec:
             description: spec defines the desired state of KloneCluster
             properties:
+              argoCD:
+                description: argoCD configuration for cluster registration with host
+                  ArgoCD
+                properties:
+                  clusterName:
+                    description: |-
+                      clusterName is the name to use when registering the cluster in ArgoCD
+                      If not specified, defaults to "klone-{cluster-name}"
+                    type: string
+                  enabled:
+                    description: |-
+                      enabled determines if the cluster should be registered with host ArgoCD
+                      If not specified, auto-detection is used (checks for ArgoCD in host cluster)
+                    type: boolean
+                  labels:
+                    additionalProperties:
+                      type: string
+                    description: |-
+                      labels are additional labels to add to the registered cluster in ArgoCD
+                      Default label 'cluster-type=klone' is always added
+                    type: object
+                  namespace:
+                    default: argocd
+                    description: namespace is the namespace where ArgoCD is installed
+                      in the host cluster
+                    type: string
+                type: object
               ingress:
                 description: ingress configuration for external access
                 properties:
@@ -248,6 +275,14 @@ spec:
           status:
             description: status defines the observed state of KloneCluster
             properties:
+              argoCDClusterName:
+                description: argoCDClusterName is the name used when registering the
+                  cluster in ArgoCD
+                type: string
+              argoCDRegistered:
+                description: argoCDRegistered indicates if the cluster has been registered
+                  with host ArgoCD
+                type: boolean
               clusterCIDR:
                 description: clusterCIDR is the actual CIDR assigned to the cluster
                 type: string
