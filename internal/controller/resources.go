@@ -5,6 +5,7 @@ import (
 
 	klonev1alpha1 "github.com/klone/operator/api/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
@@ -209,4 +210,84 @@ func int32Ptr(i int32) *int32 {
 
 func boolPtr(b bool) *bool {
 	return &b
+}
+
+// BuildArgoCDServiceAccount creates a ServiceAccount for ArgoCD registration jobs
+func BuildArgoCDServiceAccount(cluster *klonev1alpha1.KloneCluster) *corev1.ServiceAccount {
+	return &corev1.ServiceAccount{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "klone-argocd-registration",
+			Namespace: GetNamespaceName(cluster.Name),
+			Labels: map[string]string{
+				"app":                          "argocd-registration",
+				"klone-cluster":                cluster.Name,
+				"app.kubernetes.io/name":       "klone",
+				"app.kubernetes.io/component":  "argocd-registration",
+				"app.kubernetes.io/managed-by": "klone-operator",
+			},
+		},
+	}
+}
+
+// BuildArgoCDRole creates a Role for ArgoCD registration jobs
+func BuildArgoCDRole(cluster *klonev1alpha1.KloneCluster) *rbacv1.Role {
+	return &rbacv1.Role{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "klone-argocd-registration",
+			Namespace: GetNamespaceName(cluster.Name),
+			Labels: map[string]string{
+				"app":                          "argocd-registration",
+				"klone-cluster":                cluster.Name,
+				"app.kubernetes.io/name":       "klone",
+				"app.kubernetes.io/component":  "argocd-registration",
+				"app.kubernetes.io/managed-by": "klone-operator",
+			},
+		},
+		Rules: []rbacv1.PolicyRule{
+			{
+				APIGroups: []string{""},
+				Resources: []string{"pods"},
+				Verbs:     []string{"get", "list"},
+			},
+			{
+				APIGroups: []string{""},
+				Resources: []string{"pods/log"},
+				Verbs:     []string{"get"},
+			},
+			{
+				APIGroups: []string{""},
+				Resources: []string{"pods/exec"},
+				Verbs:     []string{"create"},
+			},
+		},
+	}
+}
+
+// BuildArgoCDRoleBinding creates a RoleBinding for ArgoCD registration jobs
+func BuildArgoCDRoleBinding(cluster *klonev1alpha1.KloneCluster) *rbacv1.RoleBinding {
+	return &rbacv1.RoleBinding{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "klone-argocd-registration",
+			Namespace: GetNamespaceName(cluster.Name),
+			Labels: map[string]string{
+				"app":                          "argocd-registration",
+				"klone-cluster":                cluster.Name,
+				"app.kubernetes.io/name":       "klone",
+				"app.kubernetes.io/component":  "argocd-registration",
+				"app.kubernetes.io/managed-by": "klone-operator",
+			},
+		},
+		RoleRef: rbacv1.RoleRef{
+			APIGroup: "rbac.authorization.k8s.io",
+			Kind:     "Role",
+			Name:     "klone-argocd-registration",
+		},
+		Subjects: []rbacv1.Subject{
+			{
+				Kind:      "ServiceAccount",
+				Name:      "klone-argocd-registration",
+				Namespace: GetNamespaceName(cluster.Name),
+			},
+		},
+	}
 }
