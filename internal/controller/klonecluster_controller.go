@@ -56,6 +56,7 @@ type KloneClusterReconciler struct {
 // +kubebuilder:rbac:groups="",resources=persistentvolumeclaims,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch;delete;patch
+// ^^ includes ArgoCD secrets for cluster registration
 // +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=pods/exec,verbs=create;get
 
@@ -66,6 +67,11 @@ type KloneClusterReconciler struct {
 
 // Networking
 // +kubebuilder:rbac:groups=networking.k8s.io,resources=ingresses,verbs=get;list;watch;create;update;patch;delete
+
+// RBAC for ArgoCD integration
+// +kubebuilder:rbac:groups="",resources=serviceaccounts,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=roles,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=rolebindings,verbs=get;list;watch;create;update;patch;delete
 
 // Reconcile is the main reconciliation loop
 func (r *KloneClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -223,6 +229,79 @@ func (r *KloneClusterReconciler) reconcileResources(ctx context.Context, cluster
 			return fmt.Errorf("failed to reconcile ingress: %w", err)
 		}
 		log.Info("Reconciled Ingress", "namespace", namespaceName, "name", ingress.Name, "type", cluster.Spec.Ingress.Type)
+	}
+
+	// 9. Register with ArgoCD (if enabled and not already registered)
+	// Only attempt registration if terminal is ready (needed for kubeconfig extraction)
+	terminalReady, err := r.isDeploymentReady(ctx, namespaceName, GetTerminalDeploymentName())
+	if err == nil && terminalReady {
+		shouldRegister, argoCDNamespace, err := ShouldRegisterWithArgoCD(ctx, r.Client, cluster)
+		if err != nil {
+			log.Error(err, "Failed to determine if should register with ArgoCD")
+		} else if shouldRegister && !cluster.Status.ArgoCDRegistered {
+			log.Info("Registering cluster with ArgoCD", "argocdNamespace", argoCDNamespace)
+
+			// Create ServiceAccount, Role, and RoleBinding for ArgoCD registration
+			sa := BuildArgoCDServiceAccount(cluster)
+			if err := r.createOrUpdate(ctx, sa); err != nil {
+				log.Error(err, "Failed to reconcile ArgoCD ServiceAccount")
+			} else {
+				log.Info("Reconciled ArgoCD ServiceAccount", "namespace", namespaceName, "name", sa.Name)
+			}
+
+			role := BuildArgoCDRole(cluster)
+			if err := r.createOrUpdate(ctx, role); err != nil {
+				log.Error(err, "Failed to reconcile ArgoCD Role")
+			} else {
+				log.Info("Reconciled ArgoCD Role", "namespace", namespaceName, "name", role.Name)
+			}
+
+			rb := BuildArgoCDRoleBinding(cluster)
+			if err := r.createOrUpdate(ctx, rb); err != nil {
+				log.Error(err, "Failed to reconcile ArgoCD RoleBinding")
+			} else {
+				log.Info("Reconciled ArgoCD RoleBinding", "namespace", namespaceName, "name", rb.Name)
+			}
+
+			// Get ArgoCD credentials
+			detector := NewArgoCDDetector(r.Client, argoCDNamespace)
+			username, password, err := detector.GetArgoCDCredentials(ctx)
+			if err != nil {
+				log.Error(err, "Failed to get ArgoCD credentials")
+			} else {
+				// Create ArgoCD registration Job
+				job := BuildArgoCDRegisterJob(cluster, argoCDNamespace, username, password)
+				job.SetNamespace(namespaceName)
+
+				// Note: Cannot set owner reference across namespaces
+				// Job will be cleaned up via TTLSecondsAfterFinished
+
+				// Check if job already exists
+				existingJob := &batchv1.Job{}
+				jobKey := client.ObjectKey{Namespace: namespaceName, Name: job.Name}
+				err := r.Get(ctx, jobKey, existingJob)
+				if err != nil && apierrors.IsNotFound(err) {
+					// Create the job
+					if err := r.Create(ctx, job); err != nil {
+						log.Error(err, "Failed to create ArgoCD registration job")
+					} else {
+						log.Info("Created ArgoCD registration job", "namespace", namespaceName, "name", job.Name)
+					}
+				} else if err == nil {
+					// Job exists, check if it completed successfully
+					if existingJob.Status.Succeeded > 0 {
+						// Mark as registered in status
+						cluster.Status.ArgoCDRegistered = true
+						cluster.Status.ArgoCDClusterName = GetClusterRegistrationName(cluster)
+						log.Info("ArgoCD registration job completed successfully")
+					} else if existingJob.Status.Failed > 0 {
+						log.Info("ArgoCD registration job failed, will retry on next reconcile")
+					}
+				}
+			}
+		} else if shouldRegister && cluster.Status.ArgoCDRegistered {
+			log.V(1).Info("Cluster already registered with ArgoCD", "clusterName", cluster.Status.ArgoCDClusterName)
+		}
 	}
 
 	return nil
@@ -456,6 +535,13 @@ func (r *KloneClusterReconciler) handleDeletion(ctx context.Context, cluster *kl
 			log.Error(err, "Failed to clear namespace finalizers")
 		}
 
+		// Unregister from ArgoCD if registered
+		if cluster.Status.ArgoCDRegistered {
+			if err := r.unregisterFromArgoCD(ctx, cluster); err != nil {
+				log.Error(err, "Failed to unregister cluster from ArgoCD")
+			}
+		}
+
 		// Clean up hostPath directory before deleting PV
 		if err := r.cleanupHostPath(ctx, cluster); err != nil {
 			log.Error(err, "Failed to cleanup hostPath directory")
@@ -584,6 +670,94 @@ func (r *KloneClusterReconciler) cleanupHostPath(ctx context.Context, cluster *k
 	}
 
 	log.Info("Cleanup job timed out, continuing with deletion", "path", hostPath)
+	return nil
+}
+
+// unregisterFromArgoCD removes the cluster from ArgoCD's managed clusters
+func (r *KloneClusterReconciler) unregisterFromArgoCD(ctx context.Context, cluster *klonev1alpha1.KloneCluster) error {
+	log := logf.FromContext(ctx)
+
+	// Determine ArgoCD namespace
+	argoCDNamespace := "argocd"
+	if cluster.Spec.ArgoCD != nil && cluster.Spec.ArgoCD.Namespace != "" {
+		argoCDNamespace = cluster.Spec.ArgoCD.Namespace
+	}
+
+	// Get ArgoCD credentials
+	detector := NewArgoCDDetector(r.Client, argoCDNamespace)
+	username, password, err := detector.GetArgoCDCredentials(ctx)
+	if err != nil {
+		log.Error(err, "Failed to get ArgoCD credentials for unregistration")
+		return err
+	}
+
+	// Get cluster name
+	clusterName := cluster.Status.ArgoCDClusterName
+	if clusterName == "" {
+		clusterName = GetClusterRegistrationName(cluster)
+	}
+
+	// Create a job to unregister the cluster
+	namespaceName := GetNamespaceName(cluster.Name)
+	jobName := fmt.Sprintf("argocd-unregister-%s", cluster.Name)
+	ttl := int32(60) // Clean up after 1 minute
+	backoffLimit := int32(2)
+
+	job := &batchv1.Job{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      jobName,
+			Namespace: namespaceName,
+			Labels: map[string]string{
+				"app":           "argocd-unregister",
+				"klone-cluster": cluster.Name,
+			},
+		},
+		Spec: batchv1.JobSpec{
+			TTLSecondsAfterFinished: &ttl,
+			BackoffLimit:            &backoffLimit,
+			Template: corev1.PodTemplateSpec{
+				Spec: corev1.PodSpec{
+					RestartPolicy: corev1.RestartPolicyOnFailure,
+					Containers: []corev1.Container{
+						{
+							Name:    "argocd-unregister",
+							Image:   "quay.io/argoproj/argocd:v2.9.3",
+							Command: []string{"/bin/sh", "-c"},
+							Args: []string{
+								fmt.Sprintf(`
+set -e
+
+# Login to ArgoCD
+echo "Logging in to ArgoCD..."
+argocd login argocd-server.%s.svc.cluster.local:443 \
+  --username=%s \
+  --password=%s \
+  --insecure
+
+# Unregister the cluster by name
+echo "Unregistering cluster: %s"
+if argocd cluster list | grep -q "%s"; then
+  argocd cluster rm %s --yes || true
+  echo "Cluster unregistered successfully"
+else
+  echo "Cluster not found in ArgoCD, skipping unregistration"
+fi
+`, argoCDNamespace, username, password, clusterName, clusterName, clusterName),
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	// Create the job
+	if err := r.Create(ctx, job); err != nil && !apierrors.IsAlreadyExists(err) {
+		log.Error(err, "Failed to create ArgoCD unregistration job")
+		return err
+	}
+
+	log.Info("Created ArgoCD unregistration job", "namespace", namespaceName, "name", jobName)
 	return nil
 }
 
