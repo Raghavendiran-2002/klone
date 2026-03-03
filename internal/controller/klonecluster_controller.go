@@ -59,6 +59,7 @@ type KloneClusterReconciler struct {
 // ^^ includes ArgoCD secrets for cluster registration
 // +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=pods/exec,verbs=create;get
+// +kubebuilder:rbac:groups="",resources=pods/log,verbs=get
 
 // Workloads
 // +kubebuilder:rbac:groups=apps,resources=statefulsets,verbs=get;list;watch;create;update;patch;delete
