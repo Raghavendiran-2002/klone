@@ -48,6 +48,10 @@ type KloneClusterSpec struct {
 	// metricsServer configuration for auto-installation
 	// +optional
 	MetricsServer *MetricsServerSpec `json:"metricsServer,omitempty"`
+
+	// argoCD configuration for cluster registration with host ArgoCD
+	// +optional
+	ArgoCD *ArgoCDSpec `json:"argoCD,omitempty"`
 }
 
 // K3sSpec defines k3s cluster configuration
@@ -249,6 +253,29 @@ type MetricsServerSpec struct {
 	Image string `json:"image,omitempty"`
 }
 
+// ArgoCDSpec defines ArgoCD integration configuration
+type ArgoCDSpec struct {
+	// enabled determines if the cluster should be registered with host ArgoCD
+	// If not specified, auto-detection is used (checks for ArgoCD in host cluster)
+	// +optional
+	Enabled *bool `json:"enabled,omitempty"`
+
+	// namespace is the namespace where ArgoCD is installed in the host cluster
+	// +kubebuilder:default="argocd"
+	// +optional
+	Namespace string `json:"namespace,omitempty"`
+
+	// labels are additional labels to add to the registered cluster in ArgoCD
+	// Default label 'cluster-type=klone' is always added
+	// +optional
+	Labels map[string]string `json:"labels,omitempty"`
+
+	// clusterName is the name to use when registering the cluster in ArgoCD
+	// If not specified, defaults to "klone-{cluster-name}"
+	// +optional
+	ClusterName string `json:"clusterName,omitempty"`
+}
+
 // KloneClusterStatus defines the observed state of KloneCluster.
 type KloneClusterStatus struct {
 	// phase represents the current lifecycle phase of the cluster
@@ -297,6 +324,14 @@ type KloneClusterStatus struct {
 	// serviceCIDR is the actual CIDR assigned for services
 	// +optional
 	ServiceCIDR string `json:"serviceCIDR,omitempty"`
+
+	// argoCDRegistered indicates if the cluster has been registered with host ArgoCD
+	// +optional
+	ArgoCDRegistered bool `json:"argoCDRegistered,omitempty"`
+
+	// argoCDClusterName is the name used when registering the cluster in ArgoCD
+	// +optional
+	ArgoCDClusterName string `json:"argoCDClusterName,omitempty"`
 }
 
 // WorkloadStatus represents the status of a workload
