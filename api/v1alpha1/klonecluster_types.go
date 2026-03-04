@@ -274,6 +274,39 @@ type ArgoCDSpec struct {
 	// If not specified, defaults to "klone-{cluster-name}"
 	// +optional
 	ClusterName string `json:"clusterName,omitempty"`
+
+	// repositories defines Git repository secrets to create in the nested cluster
+	// These secrets will be created in the argocd namespace with proper labels
+	// +optional
+	Repositories []ArgoCDRepository `json:"repositories,omitempty"`
+}
+
+// ArgoCDRepository defines a Git repository secret for ArgoCD
+type ArgoCDRepository struct {
+	// name of the repository secret
+	// +optional
+	Name string `json:"name,omitempty"`
+
+	// url of the Git repository
+	// +kubebuilder:validation:Required
+	URL string `json:"url"`
+
+	// username for repository authentication
+	// +optional
+	Username string `json:"username,omitempty"`
+
+	// password or token for repository authentication
+	// +optional
+	Password string `json:"password,omitempty"`
+
+	// sshPrivateKey for SSH-based authentication
+	// +optional
+	SSHPrivateKey string `json:"sshPrivateKey,omitempty"`
+
+	// type of repository (git, helm)
+	// +kubebuilder:default="git"
+	// +optional
+	Type string `json:"type,omitempty"`
 }
 
 // KloneClusterStatus defines the observed state of KloneCluster.

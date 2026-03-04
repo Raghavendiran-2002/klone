@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	"strings"
 
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -272,6 +273,184 @@ func BuildArgoCDCRDRoleBinding(cluster *klonev1alpha1.KloneCluster) *rbacv1.Role
 	}
 }
 
+// BuildArgoCDSecretReaderRole creates a Role in argocd namespace for reading repository secrets
+func BuildArgoCDSecretReaderRole(cluster *klonev1alpha1.KloneCluster) *rbacv1.Role {
+	argoCDNamespace := "argocd"
+	if cluster.Spec.ArgoCD != nil && cluster.Spec.ArgoCD.Namespace != "" {
+		argoCDNamespace = cluster.Spec.ArgoCD.Namespace
+	}
+
+	return &rbacv1.Role{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      fmt.Sprintf("argocd-secret-reader-%s", cluster.Name),
+			Namespace: argoCDNamespace,
+			Labels: map[string]string{
+				"app":     "argocd-crd-installer",
+				"cluster": cluster.Name,
+			},
+		},
+		Rules: []rbacv1.PolicyRule{
+			{
+				APIGroups: []string{""},
+				Resources: []string{"secrets"},
+				Verbs:     []string{"get", "list"},
+			},
+		},
+	}
+}
+
+// BuildArgoCDSecretReaderRoleBinding creates a RoleBinding in argocd namespace
+func BuildArgoCDSecretReaderRoleBinding(cluster *klonev1alpha1.KloneCluster) *rbacv1.RoleBinding {
+	argoCDNamespace := "argocd"
+	if cluster.Spec.ArgoCD != nil && cluster.Spec.ArgoCD.Namespace != "" {
+		argoCDNamespace = cluster.Spec.ArgoCD.Namespace
+	}
+
+	namespace := cluster.Status.Namespace
+	if namespace == "" {
+		namespace = cluster.Name
+	}
+
+	return &rbacv1.RoleBinding{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      fmt.Sprintf("argocd-secret-reader-%s", cluster.Name),
+			Namespace: argoCDNamespace,
+			Labels: map[string]string{
+				"app":     "argocd-crd-installer",
+				"cluster": cluster.Name,
+			},
+		},
+		Subjects: []rbacv1.Subject{
+			{
+				Kind:      "ServiceAccount",
+				Name:      "argocd-crd-installer",
+				Namespace: namespace,
+			},
+		},
+		RoleRef: rbacv1.RoleRef{
+			APIGroup: "rbac.authorization.k8s.io",
+			Kind:     "Role",
+			Name:     fmt.Sprintf("argocd-secret-reader-%s", cluster.Name),
+		},
+	}
+}
+
+// buildImportHostArgoCDRepositorySecrets generates commands to import repository secrets from host cluster
+func buildImportHostArgoCDRepositorySecrets(cluster *klonev1alpha1.KloneCluster) string {
+	argoCDNamespace := "argocd"
+	if cluster.Spec.ArgoCD != nil && cluster.Spec.ArgoCD.Namespace != "" {
+		argoCDNamespace = cluster.Spec.ArgoCD.Namespace
+	}
+
+	// Generate script to copy secrets from host cluster to nested cluster
+	return fmt.Sprintf(`echo "Importing ArgoCD repository secrets from host cluster..."
+
+# Get count of repository secrets in host cluster
+SECRET_COUNT=$(kubectl get secrets -n %s -l argocd.argoproj.io/secret-type=repository --no-headers 2>/dev/null | wc -l | tr -d ' ')
+
+if [ "$SECRET_COUNT" -gt 0 ]; then
+  echo "Found $SECRET_COUNT repository secret(s) in host cluster"
+
+  # Get each secret and import to nested cluster
+  kubectl get secrets -n %s -l argocd.argoproj.io/secret-type=repository -o name 2>/dev/null | while read -r secret_name; do
+    SECRET_NAME=$(echo "$secret_name" | cut -d/ -f2)
+    echo "Importing secret: $SECRET_NAME"
+
+    # Get secret as YAML and apply to nested cluster
+    kubectl get secret "$SECRET_NAME" -n %s -o yaml 2>/dev/null | \
+      sed 's/namespace: .*/namespace: argocd/' | \
+      sed '/resourceVersion:/d' | \
+      sed '/uid:/d' | \
+      sed '/creationTimestamp:/d' | \
+      kubectl exec -i -n %s $TERMINAL_POD -c terminal -- kubectl apply -f - || echo "Warning: Failed to import $SECRET_NAME"
+
+    echo "Successfully imported: $SECRET_NAME"
+  done
+
+  echo "Completed importing $SECRET_COUNT repository secret(s)"
+else
+  echo "No repository secrets found in host cluster to import"
+fi
+`, argoCDNamespace, argoCDNamespace, argoCDNamespace, cluster.Status.Namespace)
+}
+
+// buildArgoCDRepositorySecrets generates kubectl commands to create repository secrets
+func buildArgoCDRepositorySecrets(cluster *klonev1alpha1.KloneCluster) string {
+	var commands []string
+
+	// First, import secrets from host cluster
+	commands = append(commands, buildImportHostArgoCDRepositorySecrets(cluster))
+
+	// Then, create any additional secrets defined in the spec
+	if cluster.Spec.ArgoCD != nil && len(cluster.Spec.ArgoCD.Repositories) > 0 {
+		commands = append(commands, "\necho \"Creating additional repository secrets from spec...\"")
+
+		for i, repo := range cluster.Spec.ArgoCD.Repositories {
+			secretName := repo.Name
+			if secretName == "" {
+				secretName = fmt.Sprintf("repo-%d", i)
+			}
+
+			// Build secret data based on authentication method
+			var secretData string
+			if repo.SSHPrivateKey != "" {
+				// SSH-based authentication
+				secretData = fmt.Sprintf(`  url: %s
+  sshPrivateKey: |
+%s
+  type: %s`, repo.URL, indentString(repo.SSHPrivateKey, 4), repo.Type)
+			} else {
+				// HTTPS-based authentication
+				secretData = fmt.Sprintf(`  url: %s`, repo.URL)
+				if repo.Username != "" {
+					secretData += fmt.Sprintf(`
+  username: %s`, repo.Username)
+				}
+				if repo.Password != "" {
+					secretData += fmt.Sprintf(`
+  password: %s`, repo.Password)
+				}
+				secretData += fmt.Sprintf(`
+  type: %s`, repo.Type)
+			}
+
+			secretYAML := fmt.Sprintf(`cat <<'REPOSECRET' | kubectl apply -f -
+apiVersion: v1
+kind: Secret
+metadata:
+  name: %s
+  namespace: argocd
+  labels:
+    argocd.argoproj.io/secret-type: repository
+type: Opaque
+stringData:
+%s
+REPOSECRET`, secretName, secretData)
+
+			commands = append(commands, fmt.Sprintf(`echo "Creating repository secret: %s"
+%s`, secretName, secretYAML))
+		}
+	}
+
+	if len(commands) == 0 {
+		return "echo \"No repository secrets to create\""
+	}
+
+	return strings.Join(commands, "\n")
+}
+
+// indentString indents each line of a string by the specified number of spaces
+func indentString(s string, spaces int) string {
+	indent := strings.Repeat(" ", spaces)
+	lines := strings.Split(s, "\n")
+	for i, line := range lines {
+		if line != "" {
+			lines[i] = indent + line
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
 // BuildArgoCDCRDInstallJob creates a Job that installs ArgoCD CRDs into the nested K3s cluster
 func BuildArgoCDCRDInstallJob(cluster *klonev1alpha1.KloneCluster) *batchv1.Job {
 	namespace := cluster.Status.Namespace
@@ -337,9 +516,9 @@ if [ -z "$TERMINAL_POD" ]; then
   exit 1
 fi
 
-echo "Installing ArgoCD CRDs in nested K3s cluster..."
+echo "Installing ArgoCD CRDs and resources in nested K3s cluster..."
 
-# Install ArgoCD CRDs from the official manifest
+# Install ArgoCD CRDs and create resources
 kubectl exec -n %s $TERMINAL_POD -c terminal -- sh -c '
 set -e
 echo "Downloading ArgoCD CRDs..."
@@ -352,11 +531,15 @@ kubectl get crd applications.argoproj.io
 kubectl get crd applicationsets.argoproj.io
 kubectl get crd appprojects.argoproj.io
 
-echo "ArgoCD CRDs installed successfully!"
+echo "Creating argocd namespace..."
+kubectl create namespace argocd --dry-run=client -o yaml | kubectl apply -f -
 '
 
+echo "Importing ArgoCD repository secrets from host cluster to nested cluster..."
+%s
+
 echo "ArgoCD CRDs installation complete for cluster %s"
-`, namespace, namespace, namespace, cluster.Name)},
+`, namespace, namespace, namespace, buildArgoCDRepositorySecrets(cluster), cluster.Name)},
 						},
 					},
 				},

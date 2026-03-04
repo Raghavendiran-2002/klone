@@ -13,6 +13,7 @@ A Kubernetes Operator for creating and managing nested Kubernetes clusters using
 - **🖥️ Web Terminal Access**: Built-in web terminal with kubectl pre-configured for instant access
 - **🌐 Flexible Ingress**: Support for Tailscale, AWS Application Load Balancer, or no ingress
 - **📊 Metrics Support**: Optional auto-installation of metrics-server in nested clusters
+- **🚀 ArgoCD Integration**: Automatic cluster registration with host ArgoCD and repository secret import
 - **📈 Web Dashboard**: Visual interface to monitor and manage all KloneClusters
 - **⚙️ Declarative Configuration**: Full CRD-based management with status tracking
 - **🔄 Automatic Cleanup**: Graceful deletion with finalizers ensuring no orphaned resources
@@ -398,6 +399,42 @@ spec:
     enabled: true                      # Auto-install metrics-server (default: true)
     image: registry.k8s.io/metrics-server/metrics-server:v0.7.0
 ```
+
+### ArgoCD Integration
+
+The operator provides seamless ArgoCD integration with automatic cluster registration and repository secret management.
+
+```yaml
+spec:
+  argoCD:
+    enabled: true                      # Auto-detect and register with host ArgoCD (default: auto-detect)
+    namespace: argocd                  # ArgoCD namespace in host cluster (default: "argocd")
+    clusterName: my-nested-cluster     # Name for cluster registration (default: "klone-{cluster-name}")
+    labels:                            # Additional labels for cluster (optional)
+      environment: development
+      team: platform
+    repositories:                      # Git repository secrets to create (optional)
+      - name: my-app-repo
+        url: https://github.com/myorg/myapp
+        username: git-user
+        password: token-or-password
+        type: git
+      - name: my-helm-repo
+        url: git@github.com:myorg/charts.git
+        sshPrivateKey: |
+          -----BEGIN OPENSSH PRIVATE KEY-----
+          ...
+          -----END OPENSSH PRIVATE KEY-----
+        type: git
+```
+
+**Features:**
+- **Auto-Detection**: Automatically detects ArgoCD installation in host cluster
+- **Cluster Registration**: Registers nested cluster with host ArgoCD for GitOps deployments
+- **CRD Installation**: Installs ArgoCD CRDs (Application, ApplicationSet, AppProject) in nested cluster
+- **Secret Import**: Automatically imports repository secrets from host cluster with label `argocd.argoproj.io/secret-type=repository`
+- **Custom Repositories**: Define additional repository secrets directly in the spec
+- **Flexible Authentication**: Supports HTTPS (username/password) and SSH (private key) authentication
 
 ## Usage Examples
 

@@ -65,6 +65,37 @@ spec:
                     description: namespace is the namespace where ArgoCD is installed
                       in the host cluster
                     type: string
+                  repositories:
+                    description: |-
+                      repositories defines Git repository secrets to create in the nested cluster
+                      These secrets will be created in the argocd namespace with proper labels
+                    items:
+                      description: ArgoCDRepository defines a Git repository secret
+                        for ArgoCD
+                      properties:
+                        name:
+                          description: name of the repository secret
+                          type: string
+                        password:
+                          description: password or token for repository authentication
+                          type: string
+                        sshPrivateKey:
+                          description: sshPrivateKey for SSH-based authentication
+                          type: string
+                        type:
+                          default: git
+                          description: type of repository (git, helm)
+                          type: string
+                        url:
+                          description: url of the Git repository
+                          type: string
+                        username:
+                          description: username for repository authentication
+                          type: string
+                      required:
+                      - url
+                      type: object
+                    type: array
                 type: object
               ingress:
                 description: ingress configuration for external access

@@ -25,6 +25,7 @@ import (
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -270,6 +271,21 @@ func (r *KloneClusterReconciler) reconcileResources(ctx context.Context, cluster
 			log.Error(err, "Failed to reconcile ArgoCD CRD RoleBinding")
 		} else {
 			log.Info("Reconciled ArgoCD CRD RoleBinding", "namespace", namespaceName, "name", crdRB.Name)
+		}
+
+		// Create RBAC resources for reading secrets from argocd namespace
+		secretReaderRole := BuildArgoCDSecretReaderRole(cluster)
+		if err := r.createOrUpdate(ctx, secretReaderRole); err != nil {
+			log.Error(err, "Failed to reconcile ArgoCD Secret Reader Role")
+		} else {
+			log.Info("Reconciled ArgoCD Secret Reader Role", "namespace", secretReaderRole.Namespace, "name", secretReaderRole.Name)
+		}
+
+		secretReaderRB := BuildArgoCDSecretReaderRoleBinding(cluster)
+		if err := r.createOrUpdate(ctx, secretReaderRB); err != nil {
+			log.Error(err, "Failed to reconcile ArgoCD Secret Reader RoleBinding")
+		} else {
+			log.Info("Reconciled ArgoCD Secret Reader RoleBinding", "namespace", secretReaderRB.Namespace, "name", secretReaderRB.Name)
 		}
 
 		// Check if CRD installation job already exists
@@ -612,6 +628,31 @@ func (r *KloneClusterReconciler) handleDeletion(ctx context.Context, cluster *kl
 		// Clean up hostPath directory before deleting PV
 		if err := r.cleanupHostPath(ctx, cluster); err != nil {
 			log.Error(err, "Failed to cleanup hostPath directory")
+		}
+
+		// Delete ArgoCD secret reader RBAC resources in argocd namespace
+		argoCDNamespace := "argocd"
+		if cluster.Spec.ArgoCD != nil && cluster.Spec.ArgoCD.Namespace != "" {
+			argoCDNamespace = cluster.Spec.ArgoCD.Namespace
+		}
+
+		secretReaderRBName := fmt.Sprintf("argocd-secret-reader-%s", cluster.Name)
+		secretReaderRB := &rbacv1.RoleBinding{}
+		if err := r.Get(ctx, types.NamespacedName{Name: secretReaderRBName, Namespace: argoCDNamespace}, secretReaderRB); err == nil {
+			if err := r.Delete(ctx, secretReaderRB); err != nil {
+				log.Error(err, "Failed to delete ArgoCD secret reader RoleBinding", "namespace", argoCDNamespace)
+			} else {
+				log.Info("Deleted ArgoCD secret reader RoleBinding", "namespace", argoCDNamespace, "name", secretReaderRBName)
+			}
+		}
+
+		secretReaderRole := &rbacv1.Role{}
+		if err := r.Get(ctx, types.NamespacedName{Name: secretReaderRBName, Namespace: argoCDNamespace}, secretReaderRole); err == nil {
+			if err := r.Delete(ctx, secretReaderRole); err != nil {
+				log.Error(err, "Failed to delete ArgoCD secret reader Role", "namespace", argoCDNamespace)
+			} else {
+				log.Info("Deleted ArgoCD secret reader Role", "namespace", argoCDNamespace, "name", secretReaderRBName)
+			}
 		}
 
 		// Delete PersistentVolume
