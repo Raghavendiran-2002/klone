@@ -29,6 +29,7 @@ rules:
 - apiGroups:
   - ""
   resources:
+  - nodes
   - pods
   verbs:
   - get
@@ -56,6 +57,17 @@ rules:
   - get
   - list
   - patch
+  - watch
+- apiGroups:
+  - apiregistration.k8s.io
+  resources:
+  - apiservices
+  verbs:
+  - create
+  - get
+  - list
+  - patch
+  - update
   - watch
 - apiGroups:
   - apps
@@ -109,12 +121,32 @@ rules:
   - patch
   - update
 - apiGroups:
+  - metrics.k8s.io
+  resources:
+  - nodes
+  - pods
+  verbs:
+  - get
+  - list
+- apiGroups:
   - networking.k8s.io
   resources:
   - ingresses
   verbs:
   - create
   - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - rbac.authorization.k8s.io
+  resources:
+  - clusterrolebindings
+  - clusterroles
+  verbs:
+  - create
   - get
   - list
   - patch

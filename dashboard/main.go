@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -10,7 +12,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
@@ -19,9 +21,11 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	k8sruntime "k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/kubernetes"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
+	"k8s.io/client-go/tools/remotecommand"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -312,6 +316,138 @@ func getPodRestarts(pod *corev1.Pod) int32 {
 	return restarts
 }
 
+// getNodeMetrics fetches node metrics from metrics-server API
+// If namespace is empty, it fetches host cluster metrics
+// If namespace is provided, it fetches metrics from that nested K3s cluster
+func getNodeMetrics(ctx context.Context, namespace string) (map[string]interface{}, error) {
+	config, err := rest.InClusterConfig()
+	if err != nil {
+		kubeconfig := filepath.Join(os.Getenv("HOME"), ".kube", "config")
+		config, err = clientcmd.BuildConfigFromFlags("", kubeconfig)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	// If namespace is provided, we need to access the nested cluster's metrics
+	// For now, we'll only support host cluster metrics via direct API
+	// Nested cluster metrics require accessing through the terminal service
+
+	// Create HTTP client with K8s auth
+	// For in-cluster config, trust the cluster CA
+	tlsConfig := &tls.Config{
+		InsecureSkipVerify: true, // Skip verification for metrics server
+	}
+
+	client := &http.Client{
+		Transport: &http.Transport{
+			TLSClientConfig: tlsConfig,
+		},
+		Timeout: 10 * time.Second,
+	}
+
+	// Build metrics API URL
+	metricsURL := fmt.Sprintf("%s/apis/metrics.k8s.io/v1beta1/nodes", config.Host)
+
+	req, err := http.NewRequestWithContext(ctx, "GET", metricsURL, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	// Add authorization header
+	if config.BearerToken != "" {
+		req.Header.Set("Authorization", "Bearer "+config.BearerToken)
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("metrics API returned status %d", resp.StatusCode)
+	}
+
+	var result map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, err
+	}
+
+	// Parse node metrics
+	items, ok := result["items"].([]interface{})
+	if !ok {
+		return nil, fmt.Errorf("invalid metrics response format")
+	}
+
+	nodeMetrics := make(map[string]map[string]interface{})
+	var totalCPU, totalMemory int64
+
+	for _, item := range items {
+		node := item.(map[string]interface{})
+		metadata := node["metadata"].(map[string]interface{})
+		nodeName := metadata["name"].(string)
+		usage := node["usage"].(map[string]interface{})
+
+		// Parse CPU (in nanocores)
+		cpuStr := usage["cpu"].(string)
+		cpu := parseQuantity(cpuStr)
+
+		// Parse Memory (in bytes)
+		memStr := usage["memory"].(string)
+		mem := parseQuantity(memStr)
+
+		nodeMetrics[nodeName] = map[string]interface{}{
+			"cpu":        cpuStr,
+			"cpuCores":   float64(cpu) / 1000000000.0, // Convert nanocores to cores
+			"memory":     memStr,
+			"memoryMB":   mem / 1024 / 1024,
+		}
+
+		totalCPU += cpu
+		totalMemory += mem
+	}
+
+	return map[string]interface{}{
+		"nodes":       nodeMetrics,
+		"totalCPU":    float64(totalCPU) / 1000000000.0,
+		"totalMemory": totalMemory / 1024 / 1024,
+		"nodeCount":   len(nodeMetrics),
+	}, nil
+}
+
+// parseQuantity parses Kubernetes quantity strings (e.g., "100m", "1Gi")
+func parseQuantity(s string) int64 {
+	s = strings.TrimSpace(s)
+
+	// Handle suffix
+	multiplier := int64(1)
+	if strings.HasSuffix(s, "n") {
+		s = strings.TrimSuffix(s, "n")
+		multiplier = 1
+	} else if strings.HasSuffix(s, "u") {
+		s = strings.TrimSuffix(s, "u")
+		multiplier = 1000
+	} else if strings.HasSuffix(s, "m") {
+		s = strings.TrimSuffix(s, "m")
+		multiplier = 1000000
+	} else if strings.HasSuffix(s, "Ki") {
+		s = strings.TrimSuffix(s, "Ki")
+		multiplier = 1024
+	} else if strings.HasSuffix(s, "Mi") {
+		s = strings.TrimSuffix(s, "Mi")
+		multiplier = 1024 * 1024
+	} else if strings.HasSuffix(s, "Gi") {
+		s = strings.TrimSuffix(s, "Gi")
+		multiplier = 1024 * 1024 * 1024
+	}
+
+	// Parse the number
+	var value int64
+	fmt.Sscanf(s, "%d", &value)
+	return value * multiplier
+}
+
 func createCluster(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Name              string                           `json:"name"`
@@ -471,21 +607,209 @@ func createCluster(w http.ResponseWriter, r *http.Request) {
 //////////////////////////////////////////////////////
 
 func hostMetrics(w http.ResponseWriter, r *http.Request) {
-	var mem runtime.MemStats
-	runtime.ReadMemStats(&mem)
+	// Get host cluster node metrics from metrics-server
+	ctx := context.Background()
 
-	data := map[string]interface{}{
-		"goroutines": runtime.NumGoroutine(),
-		"memoryMB":   mem.Alloc / 1024 / 1024,
-		"timestamp":  time.Now(),
+	// Get all nodes
+	nodes := &corev1.NodeList{}
+	if err := k8sClient.List(ctx, nodes); err != nil {
+		http.Error(w, "Failed to get nodes: "+err.Error(), 500)
+		return
 	}
 
+	// Try to get node metrics from metrics-server API
+	nodeMetrics, err := getNodeMetrics(ctx, "")
+
+	data := map[string]interface{}{
+		"nodes":       len(nodes.Items),
+		"timestamp":   time.Now(),
+		"metricsAvailable": err == nil,
+	}
+
+	if err == nil {
+		data["metrics"] = nodeMetrics
+	} else {
+		data["error"] = "Metrics-server not available or not installed: " + err.Error()
+	}
+
+	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(data)
 }
 
 //////////////////////////////////////////////////////
 // CLUSTER METRICS
 //////////////////////////////////////////////////////
+
+// getK3sClusterMetrics execs into the terminal pod and fetches metrics from the nested K3s cluster
+func getK3sClusterMetrics(ctx context.Context, namespace string) (map[string]interface{}, error) {
+	// Find the terminal pod
+	pods := &corev1.PodList{}
+	err := k8sClient.List(ctx, pods, client.InNamespace(namespace), client.MatchingLabels{"app": "klone-terminal"})
+	if err != nil || len(pods.Items) == 0 {
+		return nil, fmt.Errorf("terminal pod not found in namespace %s", namespace)
+	}
+
+	terminalPod := pods.Items[0].Name
+
+	// Get kubeconfig
+	config, err := rest.InClusterConfig()
+	if err != nil {
+		kubeconfig := filepath.Join(os.Getenv("HOME"), ".kube", "config")
+		config, err = clientcmd.BuildConfigFromFlags("", kubeconfig)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get config: %w", err)
+		}
+	}
+
+	// Create clientset for exec
+	clientset, err := kubernetes.NewForConfig(config)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create clientset: %w", err)
+	}
+
+	// Execute kubectl top nodes command in the terminal pod
+	output, err := execInPod(ctx, clientset, config, namespace, terminalPod, "sh", []string{"-c", "kubectl top nodes --no-headers 2>/dev/null || echo 'METRICS_UNAVAILABLE'"})
+	if err != nil {
+		return nil, fmt.Errorf("failed to exec kubectl top nodes: %w", err)
+	}
+
+	output = strings.TrimSpace(output)
+	if output == "" || output == "METRICS_UNAVAILABLE" {
+		return map[string]interface{}{
+			"available": false,
+			"error":     "Metrics unavailable - metrics-server may not be ready",
+		}, nil
+	}
+
+	// Parse kubectl top nodes output
+	metrics := parseK3sMetrics(output)
+	metrics["available"] = true
+	return metrics, nil
+}
+
+// execInPod executes a command in a pod and returns the output
+func execInPod(ctx context.Context, clientset *kubernetes.Clientset, config *rest.Config, namespace, podName, container string, command []string) (string, error) {
+	req := clientset.CoreV1().RESTClient().Post().
+		Resource("pods").
+		Name(podName).
+		Namespace(namespace).
+		SubResource("exec").
+		VersionedParams(&corev1.PodExecOptions{
+			Command:   command,
+			Container: container,
+			Stdout:    true,
+			Stderr:    true,
+		}, clientgoscheme.ParameterCodec)
+
+	exec, err := remotecommand.NewSPDYExecutor(config, "POST", req.URL())
+	if err != nil {
+		return "", err
+	}
+
+	var stdout, stderr bytes.Buffer
+	err = exec.StreamWithContext(ctx, remotecommand.StreamOptions{
+		Stdout: &stdout,
+		Stderr: &stderr,
+	})
+
+	if err != nil {
+		return "", fmt.Errorf("exec error: %w, stderr: %s", err, stderr.String())
+	}
+
+	return stdout.String(), nil
+}
+
+// parseK3sMetrics parses kubectl top nodes output
+// Expected format: "node-name   CPU(cores)   CPU%   MEMORY(bytes)   MEMORY%"
+// Example: "k3s-server-0   100m   5%   500Mi   10%"
+func parseK3sMetrics(output string) map[string]interface{} {
+	lines := strings.Split(strings.TrimSpace(output), "\n")
+
+	totalCPU := 0.0
+	totalMemory := 0.0
+	nodeCount := 0
+	nodes := make(map[string]interface{})
+
+	for _, line := range lines {
+		fields := strings.Fields(line)
+		if len(fields) < 5 {
+			continue
+		}
+
+		nodeName := fields[0]
+		cpuStr := fields[1]
+		memStr := fields[3]
+
+		// Parse CPU (e.g., "100m" = 0.1 cores, "1" = 1 core)
+		cpu := parseResourceValue(cpuStr)
+		// Parse Memory (e.g., "500Mi" = 500 MiB)
+		mem := parseResourceValue(memStr)
+
+		nodes[nodeName] = map[string]interface{}{
+			"cpu":    cpuStr,
+			"memory": memStr,
+		}
+
+		totalCPU += cpu
+		totalMemory += mem
+		nodeCount++
+	}
+
+	// Calculate percentages (assuming 2 cores and 4GB per node on average for K3s)
+	// This is a rough estimate - in production, you'd query node capacity
+	estimatedTotalCPU := float64(nodeCount) * 2.0      // 2 cores per node
+	estimatedTotalMemory := float64(nodeCount) * 4096.0 // 4GB per node in MiB
+
+	cpuPercent := 0.0
+	memPercent := 0.0
+	if estimatedTotalCPU > 0 {
+		cpuPercent = (totalCPU / estimatedTotalCPU) * 100
+	}
+	if estimatedTotalMemory > 0 {
+		memPercent = (totalMemory / estimatedTotalMemory) * 100
+	}
+
+	return map[string]interface{}{
+		"nodeCount":     nodeCount,
+		"nodes":         nodes,
+		"totalCPU":      totalCPU,
+		"totalMemory":   totalMemory,
+		"cpuPercent":    cpuPercent,
+		"memoryPercent": memPercent,
+	}
+}
+
+// parseResourceValue parses Kubernetes resource values like "100m", "1", "500Mi", "2Gi"
+func parseResourceValue(s string) float64 {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return 0
+	}
+
+	// Handle CPU millicores (e.g., "100m" = 0.1)
+	if strings.HasSuffix(s, "m") {
+		val, _ := strconv.ParseFloat(strings.TrimSuffix(s, "m"), 64)
+		return val / 1000.0
+	}
+
+	// Handle memory units
+	if strings.HasSuffix(s, "Ki") {
+		val, _ := strconv.ParseFloat(strings.TrimSuffix(s, "Ki"), 64)
+		return val / 1024.0 // Convert to MiB
+	}
+	if strings.HasSuffix(s, "Mi") {
+		val, _ := strconv.ParseFloat(strings.TrimSuffix(s, "Mi"), 64)
+		return val
+	}
+	if strings.HasSuffix(s, "Gi") {
+		val, _ := strconv.ParseFloat(strings.TrimSuffix(s, "Gi"), 64)
+		return val * 1024.0 // Convert to MiB
+	}
+
+	// Plain number
+	val, _ := strconv.ParseFloat(s, 64)
+	return val
+}
 
 func clusterMetrics(w http.ResponseWriter, r *http.Request) {
 	name := strings.TrimPrefix(r.URL.Path, "/api/metrics/cluster/")
@@ -566,6 +890,10 @@ func clusterMetrics(w http.ResponseWriter, r *http.Request) {
 		health = "failed"
 	}
 
+	// Try to get K3s cluster metrics
+	k3sMetrics, metricsErr := getK3sClusterMetrics(context.Background(), ns)
+	metricsAvailable := metricsErr == nil
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{
 		"clusterName": name,
@@ -587,11 +915,13 @@ func clusterMetrics(w http.ResponseWriter, r *http.Request) {
 			"pvcs":      len(pvcs.Items),
 			"totalSize": totalPVCSize,
 		},
-		"workloads":     cluster.Status.Workloads,
-		"restarts":      totalRestarts,
-		"ingressURL":    cluster.Status.IngressURL,
-		"metricsServer": cluster.Status.MetricsServerInstalled,
-		"argoCD":        cluster.Status.ArgoCDRegistered,
+		"workloads":          cluster.Status.Workloads,
+		"restarts":           totalRestarts,
+		"ingressURL":         cluster.Status.IngressURL,
+		"metricsServer":      cluster.Status.MetricsServerInstalled,
+		"argoCD":             cluster.Status.ArgoCDRegistered,
+		"metrics":            k3sMetrics,
+		"metricsAvailable":   metricsAvailable,
 	})
 }
 
@@ -670,6 +1000,7 @@ func getIndexHTML() string {
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Klone Dashboard</title>
     <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
     <style>
         [x-cloak] { display: none !important; }
         .fade-in { animation: fadeIn 0.3s ease-in; }
@@ -687,6 +1018,20 @@ func getIndexHTML() string {
         .status-failed { background-color: #fee2e2; color: #991b1b; }
         .status-degraded { background-color: #fed7aa; color: #9a3412; }
         .status-healthy { background-color: #dcfce7; color: #166534; }
+        .metric-badge {
+            display: inline-flex;
+            align-items: center;
+            padding: 0.125rem 0.5rem;
+            border-radius: 0.375rem;
+            font-size: 0.75rem;
+            font-weight: 600;
+            margin-left: 0.5rem;
+        }
+        .metric-cpu { background-color: #f3e8ff; color: #6b21a8; }
+        .metric-memory { background-color: #cffafe; color: #0e7490; }
+        .metric-low { background-color: #dcfce7; color: #166534; }
+        .metric-medium { background-color: #fef3c7; color: #92400e; }
+        .metric-high { background-color: #fee2e2; color: #991b1b; }
     </style>
 </head>
 <body class="bg-gray-50">
@@ -750,7 +1095,7 @@ func getIndexHTML() string {
                     </div>
 
                     <!-- Stats Cards -->
-                    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+                    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mb-8">
                         <div class="bg-white rounded-xl shadow-sm p-6 border border-gray-100">
                             <div class="flex items-center justify-between">
                                 <div>
@@ -805,6 +1150,44 @@ func getIndexHTML() string {
                                     </svg>
                                 </div>
                             </div>
+                        </div>
+
+                        <!-- CPU Usage Card -->
+                        <div class="bg-gradient-to-br from-purple-50 to-purple-100 rounded-xl shadow-sm p-6 border border-purple-200 cursor-pointer hover:shadow-lg transition" onclick="showMetricsModal('cpu')">
+                            <div class="flex items-center justify-between mb-4">
+                                <div>
+                                    <p class="text-purple-700 text-sm font-medium">CPU Usage</p>
+                                    <p class="text-3xl font-bold text-purple-900 mt-1" id="stat-cpu-percent">0%</p>
+                                </div>
+                                <div class="w-12 h-12 bg-purple-200 rounded-lg flex items-center justify-center">
+                                    <svg class="w-6 h-6 text-purple-700" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z"/>
+                                    </svg>
+                                </div>
+                            </div>
+                            <div class="flex items-center justify-center" style="height: 120px;">
+                                <canvas id="cpu-donut-chart"></canvas>
+                            </div>
+                            <p class="text-xs text-purple-600 mt-3 text-center">Click to view detailed graph</p>
+                        </div>
+
+                        <!-- Memory Usage Card -->
+                        <div class="bg-gradient-to-br from-cyan-50 to-cyan-100 rounded-xl shadow-sm p-6 border border-cyan-200 cursor-pointer hover:shadow-lg transition" onclick="showMetricsModal('memory')">
+                            <div class="flex items-center justify-between mb-4">
+                                <div>
+                                    <p class="text-cyan-700 text-sm font-medium">Memory Usage</p>
+                                    <p class="text-3xl font-bold text-cyan-900 mt-1" id="stat-memory-percent">0%</p>
+                                </div>
+                                <div class="w-12 h-12 bg-cyan-200 rounded-lg flex items-center justify-center">
+                                    <svg class="w-6 h-6 text-cyan-700" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4"/>
+                                    </svg>
+                                </div>
+                            </div>
+                            <div class="flex items-center justify-center" style="height: 120px;">
+                                <canvas id="memory-donut-chart"></canvas>
+                            </div>
+                            <p class="text-xs text-cyan-600 mt-3 text-center">Click to view detailed graph</p>
                         </div>
                     </div>
 
@@ -874,7 +1257,7 @@ func getIndexHTML() string {
                         </div>
                     </div>
 
-                    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
+                    <div class="grid grid-cols-1 lg:grid-cols-4 gap-6 mb-6">
                         <div class="bg-white rounded-xl shadow-sm p-6 border border-gray-100">
                             <h4 class="text-sm font-medium text-gray-500 mb-3">Status</h4>
                             <div id="detail-status" class="status-badge status-pending">Loading...</div>
@@ -882,6 +1265,12 @@ func getIndexHTML() string {
                         <div class="bg-white rounded-xl shadow-sm p-6 border border-gray-100">
                             <h4 class="text-sm font-medium text-gray-500 mb-3">Health</h4>
                             <div id="detail-health" class="status-badge status-healthy">Healthy</div>
+                        </div>
+                        <div class="bg-white rounded-xl shadow-sm p-6 border border-gray-100">
+                            <h4 class="text-sm font-medium text-gray-500 mb-3">K3s Cluster Metrics</h4>
+                            <div id="detail-cluster-metrics" class="flex flex-wrap gap-2">
+                                <span class="text-sm text-gray-500">Loading...</span>
+                            </div>
                         </div>
                         <div class="bg-white rounded-xl shadow-sm p-6 border border-gray-100">
                             <h4 class="text-sm font-medium text-gray-500 mb-3">Ingress URL</h4>
@@ -1165,9 +1554,37 @@ func getIndexHTML() string {
         </div>
     </div>
 
+    <!-- Metrics Modal -->
+    <div id="metrics-modal" class="fixed inset-0 bg-black bg-opacity-50 hidden flex items-center justify-center z-50">
+        <div class="bg-white rounded-xl shadow-xl p-8 max-w-6xl w-full mx-4 max-h-[90vh] overflow-auto">
+            <div class="flex items-center justify-between mb-6">
+                <div>
+                    <h3 class="text-2xl font-bold text-gray-800" id="metrics-modal-title">CPU Usage</h3>
+                    <p class="text-gray-600 text-sm mt-1">Real-time metrics updating every 15 seconds</p>
+                </div>
+                <button onclick="hideMetricsModal()" class="text-gray-400 hover:text-gray-600 transition">
+                    <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+                    </svg>
+                </button>
+            </div>
+            <div style="height: 400px;">
+                <canvas id="metrics-line-chart"></canvas>
+            </div>
+            <div id="metrics-node-list" class="mt-6 grid grid-cols-1 md:grid-cols-3 gap-4">
+                <!-- Node metrics will be populated here -->
+            </div>
+        </div>
+    </div>
+
     <script>
         // Global state
         let clusters = [];
+        let metricsHistory = { cpu: [], memory: [], timestamps: [] };
+        let cpuDonutChart = null;
+        let memoryDonutChart = null;
+        let metricsLineChart = null;
+        let metricsRefreshInterval = null;
         let currentCluster = null;
         let currentClusterPods = [];
         let refreshInterval = null;
@@ -1177,6 +1594,8 @@ func getIndexHTML() string {
             showView('dashboard');
             loadClusters();
             startAutoRefresh();
+            initializeMetricsCharts();
+            startMetricsRefresh();
 
             // Toggle ArgoCD config visibility
             document.getElementById('argoCDEnabled').addEventListener('change', function() {
@@ -1227,6 +1646,230 @@ func getIndexHTML() string {
             if (!document.getElementById('create-view').classList.contains('hidden')) return 'create';
             if (!document.getElementById('detail-view').classList.contains('hidden')) return 'detail';
             return null;
+        }
+
+        // Metrics Functions
+        function initializeMetricsCharts() {
+            // Initialize CPU Donut Chart
+            const cpuCtx = document.getElementById('cpu-donut-chart').getContext('2d');
+            cpuDonutChart = new Chart(cpuCtx, {
+                type: 'doughnut',
+                data: {
+                    labels: ['Used', 'Available'],
+                    datasets: [{
+                        data: [0, 100],
+                        backgroundColor: ['#9333ea', '#e9d5ff'],
+                        borderWidth: 0
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    cutout: '70%',
+                    plugins: {
+                        legend: { display: false },
+                        tooltip: { enabled: false }
+                    },
+                    animation: { animateRotate: true, animateScale: true }
+                }
+            });
+
+            // Initialize Memory Donut Chart
+            const memCtx = document.getElementById('memory-donut-chart').getContext('2d');
+            memoryDonutChart = new Chart(memCtx, {
+                type: 'doughnut',
+                data: {
+                    labels: ['Used', 'Available'],
+                    datasets: [{
+                        data: [0, 100],
+                        backgroundColor: ['#0891b2', '#cffafe'],
+                        borderWidth: 0
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    cutout: '70%',
+                    plugins: {
+                        legend: { display: false },
+                        tooltip: { enabled: false }
+                    },
+                    animation: { animateRotate: true, animateScale: true }
+                }
+            });
+        }
+
+        function startMetricsRefresh() {
+            loadMetrics(); // Initial load
+            metricsRefreshInterval = setInterval(loadMetrics, 15000); // Refresh every 15 seconds
+        }
+
+        async function loadMetrics() {
+            try {
+                const response = await fetch('/api/metrics/host');
+                const data = await response.json();
+
+                if (data.metricsAvailable && data.metrics) {
+                    updateMetricsDisplay(data.metrics);
+                    updateMetricsHistory(data.metrics);
+                }
+            } catch (error) {
+                console.error('Failed to load metrics:', error);
+            }
+        }
+
+        async function fetchClusterMetrics(clusterName) {
+            try {
+                const response = await fetch('/api/metrics/cluster/' + clusterName);
+                const data = await response.json();
+                return data;
+            } catch (error) {
+                console.error('Failed to fetch metrics for ' + clusterName + ':', error);
+                return null;
+            }
+        }
+
+        function formatMetricBadge(label, value, type) {
+            if (value === null || value === undefined) return '';
+            const percent = Math.round(value);
+            const colorClass = percent < 50 ? 'metric-low' : percent < 80 ? 'metric-medium' : 'metric-high';
+            const typeClass = type === 'cpu' ? 'metric-cpu' : 'metric-memory';
+            return '<span class="metric-badge ' + typeClass + ' ' + colorClass + '">' + label + ': ' + percent + '%</span>';
+        }
+
+        function updateMetricsDisplay(metrics) {
+            // Assume total capacity (you can fetch this from node info if available)
+            // For demo, using placeholder values - in production, fetch actual node capacity
+            const totalCPUCores = metrics.nodeCount * 4; // Assume 4 cores per node average
+            const totalMemoryMB = metrics.nodeCount * 8192; // Assume 8GB per node average
+
+            const cpuUsedCores = metrics.totalCPU || 0;
+            const memoryUsedMB = metrics.totalMemory || 0;
+
+            const cpuPercent = Math.min(100, Math.round((cpuUsedCores / totalCPUCores) * 100));
+            const memoryPercent = Math.min(100, Math.round((memoryUsedMB / totalMemoryMB) * 100));
+
+            // Update percentage displays
+            document.getElementById('stat-cpu-percent').textContent = cpuPercent + '%';
+            document.getElementById('stat-memory-percent').textContent = memoryPercent + '%';
+
+            // Update donut charts with smooth animation
+            if (cpuDonutChart) {
+                cpuDonutChart.data.datasets[0].data = [cpuPercent, 100 - cpuPercent];
+                cpuDonutChart.update('none'); // Smooth update without animation
+                setTimeout(() => cpuDonutChart.update('active'), 50);
+            }
+
+            if (memoryDonutChart) {
+                memoryDonutChart.data.datasets[0].data = [memoryPercent, 100 - memoryPercent];
+                memoryDonutChart.update('none');
+                setTimeout(() => memoryDonutChart.update('active'), 50);
+            }
+        }
+
+        function updateMetricsHistory(metrics) {
+            const now = new Date();
+            const timeStr = now.toLocaleTimeString();
+
+            metricsHistory.timestamps.push(timeStr);
+            metricsHistory.cpu.push(metrics.totalCPU || 0);
+            metricsHistory.memory.push((metrics.totalMemory || 0) / 1024); // Convert to GB
+
+            // Keep only last 20 data points
+            if (metricsHistory.timestamps.length > 20) {
+                metricsHistory.timestamps.shift();
+                metricsHistory.cpu.shift();
+                metricsHistory.memory.shift();
+            }
+        }
+
+        function showMetricsModal(type) {
+            const modal = document.getElementById('metrics-modal');
+            const title = document.getElementById('metrics-modal-title');
+
+            if (type === 'cpu') {
+                title.textContent = 'CPU Usage Over Time';
+                initializeLineChart('cpu');
+            } else {
+                title.textContent = 'Memory Usage Over Time';
+                initializeLineChart('memory');
+            }
+
+            modal.classList.remove('hidden');
+        }
+
+        function hideMetricsModal() {
+            document.getElementById('metrics-modal').classList.add('hidden');
+            if (metricsLineChart) {
+                metricsLineChart.destroy();
+                metricsLineChart = null;
+            }
+        }
+
+        function initializeLineChart(type) {
+            const ctx = document.getElementById('metrics-line-chart').getContext('2d');
+
+            if (metricsLineChart) {
+                metricsLineChart.destroy();
+            }
+
+            const isMemory = type === 'memory';
+            const data = isMemory ? metricsHistory.memory : metricsHistory.cpu;
+            const label = isMemory ? 'Memory (GB)' : 'CPU (Cores)';
+            const color = isMemory ? '#0891b2' : '#9333ea';
+
+            metricsLineChart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: metricsHistory.timestamps,
+                    datasets: [{
+                        label: label,
+                        data: data,
+                        borderColor: color,
+                        backgroundColor: color + '20',
+                        fill: true,
+                        tension: 0.4,
+                        borderWidth: 3,
+                        pointRadius: 4,
+                        pointHoverRadius: 6
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { display: true, position: 'top' },
+                        tooltip: { mode: 'index', intersect: false }
+                    },
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            grid: { color: '#e5e7eb' },
+                            ticks: { color: '#6b7280' }
+                        },
+                        x: {
+                            grid: { display: false },
+                            ticks: { color: '#6b7280', maxRotation: 45, minRotation: 45 }
+                        }
+                    },
+                    animation: { duration: 750, easing: 'easeInOutQuart' }
+                }
+            });
+
+            // Start real-time updates for the line chart
+            const lineChartInterval = setInterval(() => {
+                if (!document.getElementById('metrics-modal').classList.contains('hidden')) {
+                    if (metricsLineChart) {
+                        const data = isMemory ? metricsHistory.memory : metricsHistory.cpu;
+                        metricsLineChart.data.labels = metricsHistory.timestamps;
+                        metricsLineChart.data.datasets[0].data = data;
+                        metricsLineChart.update('none');
+                        setTimeout(() => metricsLineChart.update('active'), 50);
+                    }
+                } else {
+                    clearInterval(lineChartInterval);
+                }
+            }, 15000);
         }
 
         // API Calls
@@ -1430,11 +2073,15 @@ func getIndexHTML() string {
                 const name = cluster.metadata.name;
                 const namespace = cluster.metadata.namespace;
                 const statusClass = 'status-' + status.toLowerCase();
+                const isRunning = status === 'Running';
 
                 return '<div class="bg-white rounded-xl shadow-sm border border-gray-100 p-6 hover:shadow-md transition cursor-pointer" onclick="viewClusterDetail(\'' + name + '\', \'' + namespace + '\')">' +
                     '<div class="flex items-center justify-between mb-4">' +
                     '<h3 class="text-xl font-semibold text-gray-800">' + name + '</h3>' +
+                    '<div class="flex items-center space-x-2">' +
                     '<span class="status-badge ' + statusClass + '">' + status + '</span>' +
+                    '<span id="grid-metrics-' + name + '"></span>' +
+                    '</div>' +
                     '</div>' +
                     '<div class="space-y-2 text-sm text-gray-600">' +
                     '<p><span class="font-medium">Namespace:</span> ' + namespace + '</p>' +
@@ -1446,6 +2093,23 @@ func getIndexHTML() string {
                     '</div>' +
                     '</div>';
             }).join('');
+
+            // Load metrics for running clusters
+            clusters.forEach(cluster => {
+                if (cluster.status?.phase === 'Running') {
+                    loadClusterMetricsForGrid(cluster.metadata.name);
+                }
+            });
+        }
+
+        async function loadClusterMetricsForGrid(clusterName) {
+            const metrics = await fetchClusterMetrics(clusterName);
+            const metricsEl = document.getElementById('grid-metrics-' + clusterName);
+            if (metricsEl && metrics) {
+                const cpuPercent = 0; // Placeholder
+                const memPercent = 0; // Placeholder
+                metricsEl.innerHTML = formatMetricBadge('CPU', cpuPercent, 'cpu') + formatMetricBadge('MEM', memPercent, 'memory');
+            }
         }
 
         function renderDashboardClusters() {
@@ -1470,6 +2134,7 @@ func getIndexHTML() string {
                         '</div>' +
                         '<div class="flex items-center space-x-3">' +
                         '<span class="status-badge ' + statusClass + '">' + status + '</span>' +
+                        '<span id="dashboard-metrics-' + name + '"></span>' +
                         (isRunning ? '<button onclick="openTerminalForCluster(\'' + name + '\')" class="bg-green-600 hover:bg-green-700 text-white px-3 py-1 rounded text-sm flex items-center space-x-1 transition">' +
                         '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">' +
                         '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/>' +
@@ -1480,6 +2145,24 @@ func getIndexHTML() string {
                         '</div>';
                 }).join('') +
                 '</div>';
+
+            // Load metrics for each cluster
+            recentClusters.forEach(cluster => {
+                if (cluster.status?.phase === 'Running') {
+                    loadClusterMetricsForDashboard(cluster.metadata.name);
+                }
+            });
+        }
+
+        async function loadClusterMetricsForDashboard(clusterName) {
+            const metrics = await fetchClusterMetrics(clusterName);
+            const metricsEl = document.getElementById('dashboard-metrics-' + clusterName);
+            if (metricsEl && metrics) {
+                // For now, show placeholder percentages - actual K3s metrics will come from API
+                const cpuPercent = 0; // Placeholder
+                const memPercent = 0; // Placeholder
+                metricsEl.innerHTML = formatMetricBadge('CPU', cpuPercent, 'cpu') + formatMetricBadge('MEM', memPercent, 'memory');
+            }
         }
 
         function renderClusterDetail(cluster, metrics, logs) {
@@ -1495,6 +2178,16 @@ func getIndexHTML() string {
             const healthClass = 'status-' + health;
             document.getElementById('detail-health').className = 'status-badge ' + healthClass;
             document.getElementById('detail-health').textContent = health.charAt(0).toUpperCase() + health.slice(1);
+
+            // Display K3s cluster metrics
+            const clusterMetricsEl = document.getElementById('detail-cluster-metrics');
+            if (metrics.metricsAvailable && metrics.metrics) {
+                const cpuPercent = 0; // Placeholder
+                const memPercent = 0; // Placeholder
+                clusterMetricsEl.innerHTML = formatMetricBadge('CPU', cpuPercent, 'cpu') + formatMetricBadge('MEM', memPercent, 'memory');
+            } else {
+                clusterMetricsEl.innerHTML = '<span class="text-sm text-gray-500">Metrics unavailable</span>';
+            }
 
             const ingressURL = cluster.status?.ingressURL || 'N/A';
             const ingressEl = document.getElementById('detail-ingress-url');

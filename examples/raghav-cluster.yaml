@@ -1,0 +1,25 @@
+apiVersion: klone.klone.io/v1alpha1
+kind: KloneCluster
+metadata:
+  name: raghav-cluster
+  namespace: default
+spec:
+  k3s:
+    image: rancher/k3s:v1.35.1-k3s1
+    token: supersecrettoken123
+    controlPlane:
+      replicas: 1
+    worker:
+      replicas: 1
+  storage:
+    storageClass: local-path
+    size: 2Gi
+    hostPath: /tmp/klone
+  terminal:
+    image: alpine:3.19
+    replicas: 1
+  ingress:
+    type: none
+  metricsServer:
+    enabled: true
+    image: registry.k8s.io/metrics-server/metrics-server:v0.7.0

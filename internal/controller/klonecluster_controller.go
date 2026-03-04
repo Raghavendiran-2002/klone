@@ -50,6 +50,7 @@ type KloneClusterReconciler struct {
 // +kubebuilder:rbac:groups=klone.klone.io,resources=kloneclusters/finalizers,verbs=update
 
 // Core resources
+// +kubebuilder:rbac:groups="",resources=nodes,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=namespaces,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=namespaces/finalize,verbs=update
 // +kubebuilder:rbac:groups="",resources=persistentvolumes,verbs=get;list;watch;create;update;patch;delete
@@ -73,6 +74,13 @@ type KloneClusterReconciler struct {
 // +kubebuilder:rbac:groups="",resources=serviceaccounts,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=roles,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=rolebindings,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterroles,verbs=get;list;watch;create;update;patch
+// +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterrolebindings,verbs=get;list;watch;create;update;patch
+// +kubebuilder:rbac:groups=apiregistration.k8s.io,resources=apiservices,verbs=get;list;watch;create;update;patch
+
+// Metrics API for dashboard
+// +kubebuilder:rbac:groups=metrics.k8s.io,resources=nodes,verbs=get;list
+// +kubebuilder:rbac:groups=metrics.k8s.io,resources=pods,verbs=get;list
 
 // Reconcile is the main reconciliation loop
 func (r *KloneClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -232,7 +240,12 @@ func (r *KloneClusterReconciler) reconcileResources(ctx context.Context, cluster
 		log.Info("Reconciled Ingress", "namespace", namespaceName, "name", ingress.Name, "type", cluster.Spec.Ingress.Type)
 	}
 
-	// 9. Register with ArgoCD (if enabled and not already registered)
+	// 9. Ensure host metrics-server is installed (run once, K3s clusters have it built-in)
+	if err := r.EnsureHostMetricsServer(ctx); err != nil {
+		log.Error(err, "Failed to ensure host metrics-server is installed")
+	}
+
+	// 10. Register with ArgoCD (if enabled and not already registered)
 	// Only attempt registration if terminal is ready (needed for kubeconfig extraction)
 	terminalReady, err := r.isDeploymentReady(ctx, namespaceName, GetTerminalDeploymentName())
 	if err == nil && terminalReady {
