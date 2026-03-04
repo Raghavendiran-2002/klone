@@ -5,8 +5,11 @@ import (
 	"encoding/base64"
 	"fmt"
 
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -191,4 +194,175 @@ echo "Kubeconfig extracted and encoded"
 `, controlPlaneSvc)
 
 	return base64.StdEncoding.EncodeToString([]byte(script))
+}
+
+// BuildArgoCDCRDServiceAccount creates a ServiceAccount for the ArgoCD CRD installation job
+func BuildArgoCDCRDServiceAccount(cluster *klonev1alpha1.KloneCluster) *corev1.ServiceAccount {
+	namespace := cluster.Status.Namespace
+	if namespace == "" {
+		namespace = cluster.Name
+	}
+
+	return &corev1.ServiceAccount{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "argocd-crd-installer",
+			Namespace: namespace,
+			Labels: map[string]string{
+				"app":     "argocd-crd-installer",
+				"cluster": cluster.Name,
+			},
+		},
+	}
+}
+
+// BuildArgoCDCRDRole creates a Role for the ArgoCD CRD installation job
+func BuildArgoCDCRDRole(cluster *klonev1alpha1.KloneCluster) *rbacv1.Role {
+	namespace := cluster.Status.Namespace
+	if namespace == "" {
+		namespace = cluster.Name
+	}
+
+	return &rbacv1.Role{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "argocd-crd-installer",
+			Namespace: namespace,
+			Labels: map[string]string{
+				"app":     "argocd-crd-installer",
+				"cluster": cluster.Name,
+			},
+		},
+		Rules: []rbacv1.PolicyRule{
+			{
+				APIGroups: []string{""},
+				Resources: []string{"pods", "pods/exec"},
+				Verbs:     []string{"get", "list", "create"},
+			},
+		},
+	}
+}
+
+// BuildArgoCDCRDRoleBinding creates a RoleBinding for the ArgoCD CRD installation job
+func BuildArgoCDCRDRoleBinding(cluster *klonev1alpha1.KloneCluster) *rbacv1.RoleBinding {
+	namespace := cluster.Status.Namespace
+	if namespace == "" {
+		namespace = cluster.Name
+	}
+
+	return &rbacv1.RoleBinding{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "argocd-crd-installer",
+			Namespace: namespace,
+			Labels: map[string]string{
+				"app":     "argocd-crd-installer",
+				"cluster": cluster.Name,
+			},
+		},
+		Subjects: []rbacv1.Subject{
+			{
+				Kind:      "ServiceAccount",
+				Name:      "argocd-crd-installer",
+				Namespace: namespace,
+			},
+		},
+		RoleRef: rbacv1.RoleRef{
+			APIGroup: "rbac.authorization.k8s.io",
+			Kind:     "Role",
+			Name:     "argocd-crd-installer",
+		},
+	}
+}
+
+// BuildArgoCDCRDInstallJob creates a Job that installs ArgoCD CRDs into the nested K3s cluster
+func BuildArgoCDCRDInstallJob(cluster *klonev1alpha1.KloneCluster) *batchv1.Job {
+	namespace := cluster.Status.Namespace
+	if namespace == "" {
+		namespace = cluster.Name
+	}
+
+	ttl := int32(300)            // Clean up after 5 minutes
+	backoffLimit := int32(2)     // Retry twice
+	activeDeadline := int64(600) // Timeout after 10 minutes
+
+	job := &batchv1.Job{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "install-argocd-crds",
+			Namespace: namespace,
+			Labels: map[string]string{
+				"app":         "argocd-crd-installer",
+				"cluster":     cluster.Name,
+				"managed-by":  "klone-operator",
+			},
+			// Note: Cannot set owner reference across namespaces
+			// Job will be cleaned up via TTLSecondsAfterFinished
+		},
+		Spec: batchv1.JobSpec{
+			TTLSecondsAfterFinished: &ttl,
+			BackoffLimit:            &backoffLimit,
+			ActiveDeadlineSeconds:   &activeDeadline,
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{
+					Labels: map[string]string{
+						"app":     "argocd-crd-installer",
+						"cluster": cluster.Name,
+					},
+				},
+				Spec: corev1.PodSpec{
+					ServiceAccountName: "argocd-crd-installer",
+					RestartPolicy:      corev1.RestartPolicyOnFailure,
+					Containers: []corev1.Container{
+						{
+							Name:    "install-argocd-crds",
+							Image:   "bitnami/kubectl:latest",
+							Command: []string{"/bin/sh", "-c"},
+							Args: []string{fmt.Sprintf(`
+set -e
+
+echo "Waiting for terminal pod to be ready..."
+TERMINAL_POD=""
+for i in $(seq 1 60); do
+  TERMINAL_POD=$(kubectl get pod -n %s -l app=klone-terminal -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "")
+  if [ -n "$TERMINAL_POD" ]; then
+    POD_STATUS=$(kubectl get pod -n %s $TERMINAL_POD -o jsonpath='{.status.phase}' 2>/dev/null || echo "")
+    if [ "$POD_STATUS" = "Running" ]; then
+      echo "Terminal pod found and running: $TERMINAL_POD"
+      break
+    fi
+  fi
+  echo "Terminal pod not ready yet (attempt $i/60), waiting..."
+  sleep 5
+done
+
+if [ -z "$TERMINAL_POD" ]; then
+  echo "ERROR: Terminal pod not found after 5 minutes"
+  exit 1
+fi
+
+echo "Installing ArgoCD CRDs in nested K3s cluster..."
+
+# Install ArgoCD CRDs from the official manifest
+kubectl exec -n %s $TERMINAL_POD -c terminal -- sh -c '
+set -e
+echo "Downloading ArgoCD CRDs..."
+kubectl apply --server-side -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/crds/application-crd.yaml
+kubectl apply --server-side -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/crds/applicationset-crd.yaml
+kubectl apply --server-side -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/crds/appproject-crd.yaml
+
+echo "Verifying ArgoCD CRDs installation..."
+kubectl get crd applications.argoproj.io
+kubectl get crd applicationsets.argoproj.io
+kubectl get crd appprojects.argoproj.io
+
+echo "ArgoCD CRDs installed successfully!"
+'
+
+echo "ArgoCD CRDs installation complete for cluster %s"
+`, namespace, namespace, namespace, cluster.Name)},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	return job
 }

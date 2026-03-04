@@ -58,8 +58,8 @@ type KloneClusterReconciler struct {
 // +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch;delete;patch
 // ^^ includes ArgoCD secrets for cluster registration
-// +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch
-// +kubebuilder:rbac:groups="",resources=pods/exec,verbs=create;get
+// +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch;create
+// +kubebuilder:rbac:groups="",resources=pods/exec,verbs=create;get;list
 // +kubebuilder:rbac:groups="",resources=pods/log,verbs=get
 
 // Workloads
@@ -245,9 +245,62 @@ func (r *KloneClusterReconciler) reconcileResources(ctx context.Context, cluster
 		log.Error(err, "Failed to ensure host metrics-server is installed")
 	}
 
-	// 10. Register with ArgoCD (if enabled and not already registered)
-	// Only attempt registration if terminal is ready (needed for kubeconfig extraction)
+	// 10. Install ArgoCD CRDs in nested K3s cluster by default (if terminal is ready)
 	terminalReady, err := r.isDeploymentReady(ctx, namespaceName, GetTerminalDeploymentName())
+	if err == nil && terminalReady && !cluster.Status.ArgoCDCRDsInstalled {
+		log.Info("Terminal is ready, installing ArgoCD CRDs in nested K3s cluster")
+
+		// Create RBAC resources for ArgoCD CRD installation job
+		crdSA := BuildArgoCDCRDServiceAccount(cluster)
+		if err := r.createOrUpdate(ctx, crdSA); err != nil {
+			log.Error(err, "Failed to reconcile ArgoCD CRD ServiceAccount")
+		} else {
+			log.Info("Reconciled ArgoCD CRD ServiceAccount", "namespace", namespaceName, "name", crdSA.Name)
+		}
+
+		crdRole := BuildArgoCDCRDRole(cluster)
+		if err := r.createOrUpdate(ctx, crdRole); err != nil {
+			log.Error(err, "Failed to reconcile ArgoCD CRD Role")
+		} else {
+			log.Info("Reconciled ArgoCD CRD Role", "namespace", namespaceName, "name", crdRole.Name)
+		}
+
+		crdRB := BuildArgoCDCRDRoleBinding(cluster)
+		if err := r.createOrUpdate(ctx, crdRB); err != nil {
+			log.Error(err, "Failed to reconcile ArgoCD CRD RoleBinding")
+		} else {
+			log.Info("Reconciled ArgoCD CRD RoleBinding", "namespace", namespaceName, "name", crdRB.Name)
+		}
+
+		// Check if CRD installation job already exists
+		argoCDCRDJob := BuildArgoCDCRDInstallJob(cluster)
+		existingCRDJob := &batchv1.Job{}
+		crdJobKey := client.ObjectKey{Namespace: namespaceName, Name: argoCDCRDJob.Name}
+		err := r.Get(ctx, crdJobKey, existingCRDJob)
+
+		if err != nil && apierrors.IsNotFound(err) {
+			// Create the job
+			if err := r.Create(ctx, argoCDCRDJob); err != nil && !apierrors.IsAlreadyExists(err) {
+				log.Error(err, "Failed to create ArgoCD CRD installation job")
+			} else {
+				log.Info("Created ArgoCD CRD installation job", "namespace", namespaceName, "name", argoCDCRDJob.Name)
+			}
+		} else if err == nil {
+			// Job exists, check status
+			if existingCRDJob.Status.Succeeded > 0 {
+				cluster.Status.ArgoCDCRDsInstalled = true
+				log.Info("ArgoCD CRDs installation completed successfully")
+			} else if existingCRDJob.Status.Failed > 0 {
+				log.Info("ArgoCD CRDs installation failed, will retry on next reconcile")
+			} else {
+				log.V(1).Info("ArgoCD CRDs installation job is running")
+			}
+		}
+	}
+
+	// 11. Register with ArgoCD (if enabled and not already registered)
+	// Only attempt registration if terminal is ready (needed for kubeconfig extraction)
+	terminalReady, err = r.isDeploymentReady(ctx, namespaceName, GetTerminalDeploymentName())
 	if err == nil && terminalReady {
 		shouldRegister, argoCDNamespace, err := ShouldRegisterWithArgoCD(ctx, r.Client, cluster)
 		if err != nil {

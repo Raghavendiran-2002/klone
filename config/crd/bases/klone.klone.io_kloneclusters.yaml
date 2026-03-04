@@ -275,6 +275,10 @@ spec:
           status:
             description: status defines the observed state of KloneCluster
             properties:
+              argoCDCRDsInstalled:
+                description: argoCDCRDsInstalled indicates if ArgoCD CRDs have been
+                  installed in the nested cluster
+                type: boolean
               argoCDClusterName:
                 description: argoCDClusterName is the name used when registering the
                   cluster in ArgoCD

@@ -668,7 +668,7 @@ func getK3sClusterMetrics(ctx context.Context, namespace string) (map[string]int
 	}
 
 	// Execute kubectl top nodes command in the terminal pod
-	output, err := execInPod(ctx, clientset, config, namespace, terminalPod, "sh", []string{"-c", "kubectl top nodes --no-headers 2>/dev/null || echo 'METRICS_UNAVAILABLE'"})
+	output, err := execInPod(ctx, clientset, config, namespace, terminalPod, "terminal", []string{"sh", "-c", "kubectl top nodes --no-headers 2>/dev/null || echo 'METRICS_UNAVAILABLE'"})
 	if err != nil {
 		return nil, fmt.Errorf("failed to exec kubectl top nodes: %w", err)
 	}

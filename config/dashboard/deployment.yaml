@@ -18,7 +18,7 @@ spec:
       serviceAccountName: klone-controller-manager
       containers:
       - name: dashboard
-        image: raghavendiran2002/klone-dashboard:v1.0.11
+        image: raghavendiran2002/klone-dashboard:v1.0.12
         imagePullPolicy: Always
         ports:
         - containerPort: 8080

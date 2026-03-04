@@ -329,6 +329,10 @@ type KloneClusterStatus struct {
 	// +optional
 	ArgoCDRegistered bool `json:"argoCDRegistered,omitempty"`
 
+	// argoCDCRDsInstalled indicates if ArgoCD CRDs have been installed in the nested cluster
+	// +optional
+	ArgoCDCRDsInstalled bool `json:"argoCDCRDsInstalled,omitempty"`
+
 	// argoCDClusterName is the name used when registering the cluster in ArgoCD
 	// +optional
 	ArgoCDClusterName string `json:"argoCDClusterName,omitempty"`
