@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"strings"
 
-	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -343,35 +342,77 @@ func buildImportHostArgoCDRepositorySecrets(cluster *klonev1alpha1.KloneCluster)
 	}
 
 	// Generate script to copy secrets from host cluster to nested cluster
-	return fmt.Sprintf(`echo "Importing ArgoCD repository secrets from host cluster..."
+	return fmt.Sprintf(`echo "==== Importing ArgoCD repository secrets from host cluster ===="
+
+# Debug: Check if we can access host cluster's argocd namespace
+echo "Checking access to host cluster's %s namespace..."
+if ! kubectl get namespace %s > /dev/null 2>&1; then
+  echo "WARNING: Cannot access %s namespace in host cluster"
+  echo "ArgoCD may not be installed in the host cluster"
+else
+  echo "Successfully accessed %s namespace in host cluster"
+fi
 
 # Get count of repository secrets in host cluster
+echo "Searching for repository secrets in host cluster..."
 SECRET_COUNT=$(kubectl get secrets -n %s -l argocd.argoproj.io/secret-type=repository --no-headers 2>/dev/null | wc -l | tr -d ' ')
 
 if [ "$SECRET_COUNT" -gt 0 ]; then
   echo "Found $SECRET_COUNT repository secret(s) in host cluster"
 
+  # List all secrets found
+  echo "Secrets to import:"
+  kubectl get secrets -n %s -l argocd.argoproj.io/secret-type=repository -o name 2>/dev/null
+
   # Get each secret and import to nested cluster
   kubectl get secrets -n %s -l argocd.argoproj.io/secret-type=repository -o name 2>/dev/null | while read -r secret_name; do
     SECRET_NAME=$(echo "$secret_name" | cut -d/ -f2)
-    echo "Importing secret: $SECRET_NAME"
+    echo ""
+    echo "Processing secret: $SECRET_NAME"
 
-    # Get secret as YAML and apply to nested cluster
-    kubectl get secret "$SECRET_NAME" -n %s -o yaml 2>/dev/null | \
+    # Get secret as YAML
+    echo "Fetching secret from host cluster..."
+    SECRET_YAML=$(kubectl get secret "$SECRET_NAME" -n %s -o yaml 2>&1)
+    if [ $? -ne 0 ]; then
+      echo "ERROR: Failed to fetch secret $SECRET_NAME from host cluster"
+      echo "$SECRET_YAML"
+      continue
+    fi
+
+    # Transform and apply to nested cluster
+    echo "Applying secret to nested cluster..."
+    echo "$SECRET_YAML" | \
       sed 's/namespace: .*/namespace: argocd/' | \
       sed '/resourceVersion:/d' | \
       sed '/uid:/d' | \
       sed '/creationTimestamp:/d' | \
-      kubectl exec -i -n %s $TERMINAL_POD -c terminal -- kubectl apply -f - || echo "Warning: Failed to import $SECRET_NAME"
+      sed '/ownerReferences:/,+10d' | \
+      kubectl exec -i -n %s $TERMINAL_POD -c terminal -- kubectl apply -f - 2>&1
 
-    echo "Successfully imported: $SECRET_NAME"
+    if [ $? -eq 0 ]; then
+      echo "✓ Successfully imported: $SECRET_NAME"
+    else
+      echo "✗ Failed to import: $SECRET_NAME"
+    fi
   done
 
-  echo "Completed importing $SECRET_COUNT repository secret(s)"
+  echo ""
+  echo "Completed processing $SECRET_COUNT repository secret(s)"
+
+  # Verify secrets in nested cluster
+  echo ""
+  echo "Verifying secrets in nested cluster..."
+  kubectl exec -n %s $TERMINAL_POD -c terminal -- kubectl get secrets -n argocd -l argocd.argoproj.io/secret-type=repository 2>&1 || echo "Warning: Could not verify secrets in nested cluster"
 else
   echo "No repository secrets found in host cluster to import"
+  echo "If you expected to find secrets, please check:"
+  echo "  1. ArgoCD is installed in namespace: %s"
+  echo "  2. Repository secrets exist with label: argocd.argoproj.io/secret-type=repository"
+  echo "  3. The service account has permission to read secrets from that namespace"
 fi
-`, argoCDNamespace, argoCDNamespace, argoCDNamespace, cluster.Status.Namespace)
+
+echo "==== Secret import process complete ===="
+`, argoCDNamespace, argoCDNamespace, argoCDNamespace, argoCDNamespace, argoCDNamespace, argoCDNamespace, argoCDNamespace, argoCDNamespace, cluster.Status.Namespace, cluster.Status.Namespace, argoCDNamespace)
 }
 
 // buildArgoCDRepositorySecrets generates kubectl commands to create repository secrets
@@ -451,101 +492,7 @@ func indentString(s string, spaces int) string {
 	return strings.Join(lines, "\n")
 }
 
-// BuildArgoCDCRDInstallJob creates a Job that installs ArgoCD CRDs into the nested K3s cluster
-func BuildArgoCDCRDInstallJob(cluster *klonev1alpha1.KloneCluster) *batchv1.Job {
-	namespace := cluster.Status.Namespace
-	if namespace == "" {
-		namespace = cluster.Name
-	}
-
-	ttl := int32(300)            // Clean up after 5 minutes
-	backoffLimit := int32(2)     // Retry twice
-	activeDeadline := int64(600) // Timeout after 10 minutes
-
-	job := &batchv1.Job{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "install-argocd-crds",
-			Namespace: namespace,
-			Labels: map[string]string{
-				"app":         "argocd-crd-installer",
-				"cluster":     cluster.Name,
-				"managed-by":  "klone-operator",
-			},
-			// Note: Cannot set owner reference across namespaces
-			// Job will be cleaned up via TTLSecondsAfterFinished
-		},
-		Spec: batchv1.JobSpec{
-			TTLSecondsAfterFinished: &ttl,
-			BackoffLimit:            &backoffLimit,
-			ActiveDeadlineSeconds:   &activeDeadline,
-			Template: corev1.PodTemplateSpec{
-				ObjectMeta: metav1.ObjectMeta{
-					Labels: map[string]string{
-						"app":     "argocd-crd-installer",
-						"cluster": cluster.Name,
-					},
-				},
-				Spec: corev1.PodSpec{
-					ServiceAccountName: "argocd-crd-installer",
-					RestartPolicy:      corev1.RestartPolicyOnFailure,
-					Containers: []corev1.Container{
-						{
-							Name:    "install-argocd-crds",
-							Image:   "bitnami/kubectl:latest",
-							Command: []string{"/bin/sh", "-c"},
-							Args: []string{fmt.Sprintf(`
-set -e
-
-echo "Waiting for terminal pod to be ready..."
-TERMINAL_POD=""
-for i in $(seq 1 60); do
-  TERMINAL_POD=$(kubectl get pod -n %s -l app=klone-terminal -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "")
-  if [ -n "$TERMINAL_POD" ]; then
-    POD_STATUS=$(kubectl get pod -n %s $TERMINAL_POD -o jsonpath='{.status.phase}' 2>/dev/null || echo "")
-    if [ "$POD_STATUS" = "Running" ]; then
-      echo "Terminal pod found and running: $TERMINAL_POD"
-      break
-    fi
-  fi
-  echo "Terminal pod not ready yet (attempt $i/60), waiting..."
-  sleep 5
-done
-
-if [ -z "$TERMINAL_POD" ]; then
-  echo "ERROR: Terminal pod not found after 5 minutes"
-  exit 1
-fi
-
-echo "Installing ArgoCD CRDs and resources in nested K3s cluster..."
-
-# Install ArgoCD CRDs and create resources
-kubectl exec -n %s $TERMINAL_POD -c terminal -- sh -c '
-set -e
-echo "Downloading ArgoCD CRDs..."
-kubectl apply --server-side -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/crds/application-crd.yaml
-kubectl apply --server-side -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/crds/applicationset-crd.yaml
-kubectl apply --server-side -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/crds/appproject-crd.yaml
-
-echo "Verifying ArgoCD CRDs installation..."
-kubectl get crd applications.argoproj.io
-kubectl get crd applicationsets.argoproj.io
-kubectl get crd appprojects.argoproj.io
-
-echo "Creating argocd namespace..."
-kubectl create namespace argocd --dry-run=client -o yaml | kubectl apply -f -
-'
-
-echo "Importing ArgoCD repository secrets from host cluster to nested cluster..."
-%s
-
-echo "ArgoCD CRDs installation complete for cluster %s"
-`, namespace, namespace, namespace, buildArgoCDRepositorySecrets(cluster), cluster.Name)},
-						},
-					},
-				},
-			},
-		},
-	}
-
-	return job
-}
+// NOTE: ArgoCD Helm installation has been removed.
+// The operator now only handles cluster registration/deregistration with existing ArgoCD instances.
+// Secret export functionality with labels (argocd.argoproj.io/secret-type=repository) is preserved
+// via BuildArgoCDSecretReaderRole and BuildArgoCDSecretReaderRoleBinding functions.

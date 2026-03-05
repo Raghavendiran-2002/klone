@@ -25,7 +25,6 @@ import (
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
-	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -247,76 +246,79 @@ func (r *KloneClusterReconciler) reconcileResources(ctx context.Context, cluster
 	}
 
 	// 10. Install ArgoCD CRDs in nested K3s cluster by default (if terminal is ready)
-	terminalReady, err := r.isDeploymentReady(ctx, namespaceName, GetTerminalDeploymentName())
-	if err == nil && terminalReady && !cluster.Status.ArgoCDCRDsInstalled {
-		log.Info("Terminal is ready, installing ArgoCD CRDs in nested K3s cluster")
+	// DISABLED: ArgoCD installation via Helm removed - only keeping registration functionality
+	/*
+		terminalReady, err := r.isDeploymentReady(ctx, namespaceName, GetTerminalDeploymentName())
+		if err == nil && terminalReady && !cluster.Status.ArgoCDCRDsInstalled {
+			log.Info("Terminal is ready, installing ArgoCD CRDs in nested K3s cluster")
 
-		// Create RBAC resources for ArgoCD CRD installation job
-		crdSA := BuildArgoCDCRDServiceAccount(cluster)
-		if err := r.createOrUpdate(ctx, crdSA); err != nil {
-			log.Error(err, "Failed to reconcile ArgoCD CRD ServiceAccount")
-		} else {
-			log.Info("Reconciled ArgoCD CRD ServiceAccount", "namespace", namespaceName, "name", crdSA.Name)
-		}
-
-		crdRole := BuildArgoCDCRDRole(cluster)
-		if err := r.createOrUpdate(ctx, crdRole); err != nil {
-			log.Error(err, "Failed to reconcile ArgoCD CRD Role")
-		} else {
-			log.Info("Reconciled ArgoCD CRD Role", "namespace", namespaceName, "name", crdRole.Name)
-		}
-
-		crdRB := BuildArgoCDCRDRoleBinding(cluster)
-		if err := r.createOrUpdate(ctx, crdRB); err != nil {
-			log.Error(err, "Failed to reconcile ArgoCD CRD RoleBinding")
-		} else {
-			log.Info("Reconciled ArgoCD CRD RoleBinding", "namespace", namespaceName, "name", crdRB.Name)
-		}
-
-		// Create RBAC resources for reading secrets from argocd namespace
-		secretReaderRole := BuildArgoCDSecretReaderRole(cluster)
-		if err := r.createOrUpdate(ctx, secretReaderRole); err != nil {
-			log.Error(err, "Failed to reconcile ArgoCD Secret Reader Role")
-		} else {
-			log.Info("Reconciled ArgoCD Secret Reader Role", "namespace", secretReaderRole.Namespace, "name", secretReaderRole.Name)
-		}
-
-		secretReaderRB := BuildArgoCDSecretReaderRoleBinding(cluster)
-		if err := r.createOrUpdate(ctx, secretReaderRB); err != nil {
-			log.Error(err, "Failed to reconcile ArgoCD Secret Reader RoleBinding")
-		} else {
-			log.Info("Reconciled ArgoCD Secret Reader RoleBinding", "namespace", secretReaderRB.Namespace, "name", secretReaderRB.Name)
-		}
-
-		// Check if CRD installation job already exists
-		argoCDCRDJob := BuildArgoCDCRDInstallJob(cluster)
-		existingCRDJob := &batchv1.Job{}
-		crdJobKey := client.ObjectKey{Namespace: namespaceName, Name: argoCDCRDJob.Name}
-		err := r.Get(ctx, crdJobKey, existingCRDJob)
-
-		if err != nil && apierrors.IsNotFound(err) {
-			// Create the job
-			if err := r.Create(ctx, argoCDCRDJob); err != nil && !apierrors.IsAlreadyExists(err) {
-				log.Error(err, "Failed to create ArgoCD CRD installation job")
+			// Create RBAC resources for ArgoCD CRD installation job
+			crdSA := BuildArgoCDCRDServiceAccount(cluster)
+			if err := r.createOrUpdate(ctx, crdSA); err != nil {
+				log.Error(err, "Failed to reconcile ArgoCD CRD ServiceAccount")
 			} else {
-				log.Info("Created ArgoCD CRD installation job", "namespace", namespaceName, "name", argoCDCRDJob.Name)
+				log.Info("Reconciled ArgoCD CRD ServiceAccount", "namespace", namespaceName, "name", crdSA.Name)
 			}
-		} else if err == nil {
-			// Job exists, check status
-			if existingCRDJob.Status.Succeeded > 0 {
-				cluster.Status.ArgoCDCRDsInstalled = true
-				log.Info("ArgoCD CRDs installation completed successfully")
-			} else if existingCRDJob.Status.Failed > 0 {
-				log.Info("ArgoCD CRDs installation failed, will retry on next reconcile")
+
+			crdRole := BuildArgoCDCRDRole(cluster)
+			if err := r.createOrUpdate(ctx, crdRole); err != nil {
+				log.Error(err, "Failed to reconcile ArgoCD CRD Role")
 			} else {
-				log.V(1).Info("ArgoCD CRDs installation job is running")
+				log.Info("Reconciled ArgoCD CRD Role", "namespace", namespaceName, "name", crdRole.Name)
+			}
+
+			crdRB := BuildArgoCDCRDRoleBinding(cluster)
+			if err := r.createOrUpdate(ctx, crdRB); err != nil {
+				log.Error(err, "Failed to reconcile ArgoCD CRD RoleBinding")
+			} else {
+				log.Info("Reconciled ArgoCD CRD RoleBinding", "namespace", namespaceName, "name", crdRB.Name)
+			}
+
+			// Create RBAC resources for reading secrets from argocd namespace
+			secretReaderRole := BuildArgoCDSecretReaderRole(cluster)
+			if err := r.createOrUpdate(ctx, secretReaderRole); err != nil {
+				log.Error(err, "Failed to reconcile ArgoCD Secret Reader Role")
+			} else {
+				log.Info("Reconciled ArgoCD Secret Reader Role", "namespace", secretReaderRole.Namespace, "name", secretReaderRole.Name)
+			}
+
+			secretReaderRB := BuildArgoCDSecretReaderRoleBinding(cluster)
+			if err := r.createOrUpdate(ctx, secretReaderRB); err != nil {
+				log.Error(err, "Failed to reconcile ArgoCD Secret Reader RoleBinding")
+			} else {
+				log.Info("Reconciled ArgoCD Secret Reader RoleBinding", "namespace", secretReaderRB.Namespace, "name", secretReaderRB.Name)
+			}
+
+			// Check if CRD installation job already exists
+			argoCDCRDJob := BuildArgoCDCRDInstallJob(cluster)
+			existingCRDJob := &batchv1.Job{}
+			crdJobKey := client.ObjectKey{Namespace: namespaceName, Name: argoCDCRDJob.Name}
+			err := r.Get(ctx, crdJobKey, existingCRDJob)
+
+			if err != nil && apierrors.IsNotFound(err) {
+				// Create the job
+				if err := r.Create(ctx, argoCDCRDJob); err != nil && !apierrors.IsAlreadyExists(err) {
+					log.Error(err, "Failed to create ArgoCD CRD installation job")
+				} else {
+					log.Info("Created ArgoCD CRD installation job", "namespace", namespaceName, "name", argoCDCRDJob.Name)
+				}
+			} else if err == nil {
+				// Job exists, check status
+				if existingCRDJob.Status.Succeeded > 0 {
+					cluster.Status.ArgoCDCRDsInstalled = true
+					log.Info("ArgoCD CRDs installation completed successfully")
+				} else if existingCRDJob.Status.Failed > 0 {
+					log.Info("ArgoCD CRDs installation failed, will retry on next reconcile")
+				} else {
+					log.V(1).Info("ArgoCD CRDs installation job is running")
+				}
 			}
 		}
-	}
+	*/
 
 	// 11. Register with ArgoCD (if enabled and not already registered)
 	// Only attempt registration if terminal is ready (needed for kubeconfig extraction)
-	terminalReady, err = r.isDeploymentReady(ctx, namespaceName, GetTerminalDeploymentName())
+	terminalReady, err := r.isDeploymentReady(ctx, namespaceName, GetTerminalDeploymentName())
 	if err == nil && terminalReady {
 		shouldRegister, argoCDNamespace, err := ShouldRegisterWithArgoCD(ctx, r.Client, cluster)
 		if err != nil {
@@ -631,29 +633,32 @@ func (r *KloneClusterReconciler) handleDeletion(ctx context.Context, cluster *kl
 		}
 
 		// Delete ArgoCD secret reader RBAC resources in argocd namespace
-		argoCDNamespace := "argocd"
-		if cluster.Spec.ArgoCD != nil && cluster.Spec.ArgoCD.Namespace != "" {
-			argoCDNamespace = cluster.Spec.ArgoCD.Namespace
-		}
-
-		secretReaderRBName := fmt.Sprintf("argocd-secret-reader-%s", cluster.Name)
-		secretReaderRB := &rbacv1.RoleBinding{}
-		if err := r.Get(ctx, types.NamespacedName{Name: secretReaderRBName, Namespace: argoCDNamespace}, secretReaderRB); err == nil {
-			if err := r.Delete(ctx, secretReaderRB); err != nil {
-				log.Error(err, "Failed to delete ArgoCD secret reader RoleBinding", "namespace", argoCDNamespace)
-			} else {
-				log.Info("Deleted ArgoCD secret reader RoleBinding", "namespace", argoCDNamespace, "name", secretReaderRBName)
+		// DISABLED: Secret importing functionality removed
+		/*
+			argoCDNamespace := "argocd"
+			if cluster.Spec.ArgoCD != nil && cluster.Spec.ArgoCD.Namespace != "" {
+				argoCDNamespace = cluster.Spec.ArgoCD.Namespace
 			}
-		}
 
-		secretReaderRole := &rbacv1.Role{}
-		if err := r.Get(ctx, types.NamespacedName{Name: secretReaderRBName, Namespace: argoCDNamespace}, secretReaderRole); err == nil {
-			if err := r.Delete(ctx, secretReaderRole); err != nil {
-				log.Error(err, "Failed to delete ArgoCD secret reader Role", "namespace", argoCDNamespace)
-			} else {
-				log.Info("Deleted ArgoCD secret reader Role", "namespace", argoCDNamespace, "name", secretReaderRBName)
+			secretReaderRBName := fmt.Sprintf("argocd-secret-reader-%s", cluster.Name)
+			secretReaderRB := &rbacv1.RoleBinding{}
+			if err := r.Get(ctx, types.NamespacedName{Name: secretReaderRBName, Namespace: argoCDNamespace}, secretReaderRB); err == nil {
+				if err := r.Delete(ctx, secretReaderRB); err != nil {
+					log.Error(err, "Failed to delete ArgoCD secret reader RoleBinding", "namespace", argoCDNamespace)
+				} else {
+					log.Info("Deleted ArgoCD secret reader RoleBinding", "namespace", argoCDNamespace, "name", secretReaderRBName)
+				}
 			}
-		}
+
+			secretReaderRole := &rbacv1.Role{}
+			if err := r.Get(ctx, types.NamespacedName{Name: secretReaderRBName, Namespace: argoCDNamespace}, secretReaderRole); err == nil {
+				if err := r.Delete(ctx, secretReaderRole); err != nil {
+					log.Error(err, "Failed to delete ArgoCD secret reader Role", "namespace", argoCDNamespace)
+				} else {
+					log.Info("Deleted ArgoCD secret reader Role", "namespace", argoCDNamespace, "name", secretReaderRBName)
+				}
+			}
+		*/
 
 		// Delete PersistentVolume
 		pv := &corev1.PersistentVolume{}

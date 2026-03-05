@@ -49,6 +49,9 @@ func BuildControlPlaneStatefulSet(cluster *klonev1alpha1.KloneCluster) *appsv1.S
 		"--disable=local-storage",
 		"--kube-apiserver-arg=feature-gates=",
 		fmt.Sprintf("--token=%s", token),
+		"--kube-controller-manager-arg=terminated-pod-gc-threshold=10",
+		"--kubelet-arg=feature-gates=",
+		"--kubelet-arg=allowed-unsafe-sysctls=net.*",
 	}
 
 	statefulSet := &appsv1.StatefulSet{
@@ -73,8 +76,15 @@ func BuildControlPlaneStatefulSet(cluster *klonev1alpha1.KloneCluster) *appsv1.S
 					Labels: map[string]string{
 						"app": "k3s-control-plane",
 					},
+					Annotations: map[string]string{
+						"container.apparmor.security.beta.kubernetes.io/k3s": "unconfined",
+						"container.seccomp.security.alpha.kubernetes.io/k3s": "unconfined",
+					},
 				},
 				Spec: corev1.PodSpec{
+					HostPID:     true,
+					HostIPC:     true,
+					HostNetwork: false,
 					Containers: []corev1.Container{
 						{
 							Name:  "k3s",
@@ -98,6 +108,19 @@ func BuildControlPlaneStatefulSet(cluster *klonev1alpha1.KloneCluster) *appsv1.S
 									Name:      "k3s-data",
 									MountPath: "/var/lib/rancher/k3s",
 								},
+								{
+									Name:      "dev",
+									MountPath: "/dev",
+								},
+								{
+									Name:      "sys",
+									MountPath: "/sys",
+								},
+								{
+									Name:      "lib-modules",
+									MountPath: "/lib/modules",
+									ReadOnly:  true,
+								},
 							},
 							Ports: []corev1.ContainerPort{
 								{
@@ -114,6 +137,30 @@ func BuildControlPlaneStatefulSet(cluster *klonev1alpha1.KloneCluster) *appsv1.S
 							VolumeSource: corev1.VolumeSource{
 								PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
 									ClaimName: GetPVCName(),
+								},
+							},
+						},
+						{
+							Name: "dev",
+							VolumeSource: corev1.VolumeSource{
+								HostPath: &corev1.HostPathVolumeSource{
+									Path: "/dev",
+								},
+							},
+						},
+						{
+							Name: "sys",
+							VolumeSource: corev1.VolumeSource{
+								HostPath: &corev1.HostPathVolumeSource{
+									Path: "/sys",
+								},
+							},
+						},
+						{
+							Name: "lib-modules",
+							VolumeSource: corev1.VolumeSource{
+								HostPath: &corev1.HostPathVolumeSource{
+									Path: "/lib/modules",
 								},
 							},
 						},
@@ -190,6 +237,55 @@ func BuildWorkerDeployment(cluster *klonev1alpha1.KloneCluster) *appsv1.Deployme
 							},
 							SecurityContext: &corev1.SecurityContext{
 								Privileged: boolPtr(true),
+							},
+							VolumeMounts: []corev1.VolumeMount{
+								{
+									Name:      "lib-modules",
+									MountPath: "/lib/modules",
+									ReadOnly:  true,
+								},
+								{
+									Name:      "cgroup",
+									MountPath: "/sys/fs/cgroup",
+								},
+								{
+									Name:      "run",
+									MountPath: "/run",
+								},
+								{
+									Name:      "varrun",
+									MountPath: "/var/run",
+								},
+							},
+						},
+					},
+					Volumes: []corev1.Volume{
+						{
+							Name: "lib-modules",
+							VolumeSource: corev1.VolumeSource{
+								HostPath: &corev1.HostPathVolumeSource{
+									Path: "/lib/modules",
+								},
+							},
+						},
+						{
+							Name: "cgroup",
+							VolumeSource: corev1.VolumeSource{
+								HostPath: &corev1.HostPathVolumeSource{
+									Path: "/sys/fs/cgroup",
+								},
+							},
+						},
+						{
+							Name: "run",
+							VolumeSource: corev1.VolumeSource{
+								EmptyDir: &corev1.EmptyDirVolumeSource{},
+							},
+						},
+						{
+							Name: "varrun",
+							VolumeSource: corev1.VolumeSource{
+								EmptyDir: &corev1.EmptyDirVolumeSource{},
 							},
 						},
 					},

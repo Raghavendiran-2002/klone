@@ -47,6 +47,12 @@ klone/                         (repository root)
 
 All commands should be run from the repository root directory.
 
+**Standard Build and Deploy Process**: When building and deploying new versions, always use:
+```bash
+IMG=raghavendiran2002/klone-operator:v1.0.49 make docker-build deploy
+```
+This command builds a multi-architecture Docker image (amd64 + arm64) and deploys it to the cluster.
+
 ### Local Development
 ```bash
 make manifests generate fmt vet   # Regenerate CRDs/RBAC and format code
@@ -211,6 +217,9 @@ export VERSION=v1.0.25
 
 # 2. Build and push
 IMG=raghavendiran2002/klone-operator:$VERSION make docker-build docker-push
+
+# 2.1. Build and push and deploy  ( use mostly this one)
+IMG=raghavendiran2002/klone-operator:$VERSION make docker-build docker-push deploy
 
 # 3. Deploy to cluster
 IMG=raghavendiran2002/klone-operator:$VERSION make deploy

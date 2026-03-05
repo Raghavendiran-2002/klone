@@ -116,12 +116,14 @@ run: manifests generate fmt vet ## Run a controller from your host.
 # (i.e. docker build --platform linux/arm64). However, you must enable docker buildKit for it.
 # More info: https://docs.docker.com/develop/develop-images/build_enhancements/
 .PHONY: docker-build
-docker-build: ## Build docker image with the manager.
-	$(CONTAINER_TOOL) build -t ${IMG} .
+docker-build: ## Build and push docker image with the manager for multiple architectures (amd64, arm64).
+	- $(CONTAINER_TOOL) buildx create --name klone-builder --use 2>/dev/null || true
+	$(CONTAINER_TOOL) buildx build --platform=linux/amd64,linux/arm64 -t ${IMG} --push .
+	- $(CONTAINER_TOOL) buildx rm klone-builder 2>/dev/null || true
 
 .PHONY: docker-push
-docker-push: ## Push docker image with the manager.
-	$(CONTAINER_TOOL) push ${IMG}
+docker-push: ## Push docker image with the manager (already pushed by docker-build).
+	@echo "Multi-platform image already pushed to registry by docker-build target"
 
 # PLATFORMS defines the target platforms for the manager image be built to provide support to multiple
 # architectures. (i.e. make docker-buildx IMG=myregistry/mypoperator:0.0.1). To use this option you need to:

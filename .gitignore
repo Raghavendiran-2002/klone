@@ -7,7 +7,7 @@
 # Helm
 charts/
 *.tgz
-
+*secret.yaml
 # IDE
 .vscode/
 .idea/

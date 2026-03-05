@@ -14,8 +14,8 @@ import (
 )
 
 const (
-	// Note: K3s has metrics-server built-in, so we don't need to install it in nested clusters
-	// We only need to ensure the host cluster has metrics-server installed
+// Note: K3s has metrics-server built-in, so we don't need to install it in nested clusters
+// We only need to ensure the host cluster has metrics-server installed
 )
 
 // EnsureHostMetricsServer checks if metrics-server is installed in the host cluster

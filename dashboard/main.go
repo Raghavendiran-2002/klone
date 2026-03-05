@@ -398,10 +398,10 @@ func getNodeMetrics(ctx context.Context, namespace string) (map[string]interface
 		mem := parseQuantity(memStr)
 
 		nodeMetrics[nodeName] = map[string]interface{}{
-			"cpu":        cpuStr,
-			"cpuCores":   float64(cpu) / 1000000000.0, // Convert nanocores to cores
-			"memory":     memStr,
-			"memoryMB":   mem / 1024 / 1024,
+			"cpu":      cpuStr,
+			"cpuCores": float64(cpu) / 1000000000.0, // Convert nanocores to cores
+			"memory":   memStr,
+			"memoryMB": mem / 1024 / 1024,
 		}
 
 		totalCPU += cpu
@@ -450,25 +450,25 @@ func parseQuantity(s string) int64 {
 
 func createCluster(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Name              string                           `json:"name"`
-		Namespace         string                           `json:"namespace,omitempty"`
-		K3sImage          string                           `json:"k3sImage,omitempty"`
-		K3sToken          string                           `json:"k3sToken,omitempty"`
-		ControlReplicas   *int32                           `json:"controlReplicas,omitempty"`
-		WorkerReplicas    *int32                           `json:"workerReplicas,omitempty"`
-		StorageSize       string                           `json:"storageSize,omitempty"`
-		StorageClass      string                           `json:"storageClass,omitempty"`
-		HostPath          string                           `json:"hostPath,omitempty"`
-		IngressType       string                           `json:"ingressType,omitempty"`
-		TerminalEnabled   *bool                            `json:"terminalEnabled,omitempty"`
-		TerminalImage     string                           `json:"terminalImage,omitempty"`
-		TerminalReplicas  *int32                           `json:"terminalReplicas,omitempty"`
-		MetricsEnabled    *bool                            `json:"metricsEnabled,omitempty"`
-		MetricsImage      string                           `json:"metricsImage,omitempty"`
-		ArgoCDEnabled     *bool                            `json:"argoCDEnabled,omitempty"`
-		ArgoCDNamespace   string                           `json:"argoCDNamespace,omitempty"`
-		ArgoCDClusterName string                           `json:"argoCDClusterName,omitempty"`
-		ArgoCDLabels      map[string]string                `json:"argoCDLabels,omitempty"`
+		Name              string            `json:"name"`
+		Namespace         string            `json:"namespace,omitempty"`
+		K3sImage          string            `json:"k3sImage,omitempty"`
+		K3sToken          string            `json:"k3sToken,omitempty"`
+		ControlReplicas   *int32            `json:"controlReplicas,omitempty"`
+		WorkerReplicas    *int32            `json:"workerReplicas,omitempty"`
+		StorageSize       string            `json:"storageSize,omitempty"`
+		StorageClass      string            `json:"storageClass,omitempty"`
+		HostPath          string            `json:"hostPath,omitempty"`
+		IngressType       string            `json:"ingressType,omitempty"`
+		TerminalEnabled   *bool             `json:"terminalEnabled,omitempty"`
+		TerminalImage     string            `json:"terminalImage,omitempty"`
+		TerminalReplicas  *int32            `json:"terminalReplicas,omitempty"`
+		MetricsEnabled    *bool             `json:"metricsEnabled,omitempty"`
+		MetricsImage      string            `json:"metricsImage,omitempty"`
+		ArgoCDEnabled     *bool             `json:"argoCDEnabled,omitempty"`
+		ArgoCDNamespace   string            `json:"argoCDNamespace,omitempty"`
+		ArgoCDClusterName string            `json:"argoCDClusterName,omitempty"`
+		ArgoCDLabels      map[string]string `json:"argoCDLabels,omitempty"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -596,8 +596,8 @@ func createCluster(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"message": "Cluster created successfully",
-		"name":    req.Name,
+		"message":   "Cluster created successfully",
+		"name":      req.Name,
 		"namespace": req.Namespace,
 	})
 }
@@ -621,8 +621,8 @@ func hostMetrics(w http.ResponseWriter, r *http.Request) {
 	nodeMetrics, err := getNodeMetrics(ctx, "")
 
 	data := map[string]interface{}{
-		"nodes":       len(nodes.Items),
-		"timestamp":   time.Now(),
+		"nodes":            len(nodes.Items),
+		"timestamp":        time.Now(),
 		"metricsAvailable": err == nil,
 	}
 
@@ -757,7 +757,7 @@ func parseK3sMetrics(output string) map[string]interface{} {
 
 	// Calculate percentages (assuming 2 cores and 4GB per node on average for K3s)
 	// This is a rough estimate - in production, you'd query node capacity
-	estimatedTotalCPU := float64(nodeCount) * 2.0      // 2 cores per node
+	estimatedTotalCPU := float64(nodeCount) * 2.0       // 2 cores per node
 	estimatedTotalMemory := float64(nodeCount) * 4096.0 // 4GB per node in MiB
 
 	cpuPercent := 0.0
@@ -915,13 +915,13 @@ func clusterMetrics(w http.ResponseWriter, r *http.Request) {
 			"pvcs":      len(pvcs.Items),
 			"totalSize": totalPVCSize,
 		},
-		"workloads":          cluster.Status.Workloads,
-		"restarts":           totalRestarts,
-		"ingressURL":         cluster.Status.IngressURL,
-		"metricsServer":      cluster.Status.MetricsServerInstalled,
-		"argoCD":             cluster.Status.ArgoCDRegistered,
-		"metrics":            k3sMetrics,
-		"metricsAvailable":   metricsAvailable,
+		"workloads":        cluster.Status.Workloads,
+		"restarts":         totalRestarts,
+		"ingressURL":       cluster.Status.IngressURL,
+		"metricsServer":    cluster.Status.MetricsServerInstalled,
+		"argoCD":           cluster.Status.ArgoCDRegistered,
+		"metrics":          k3sMetrics,
+		"metricsAvailable": metricsAvailable,
 	})
 }
 
