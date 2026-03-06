@@ -75,9 +75,96 @@ Depending on your ingress configuration:
 
 ## Installation
 
-### Method 1: Deploy Pre-built Operator (Recommended)
+### Method 1: Install via Helm (Recommended)
 
-This method uses the pre-built operator image from Docker Hub.
+The easiest way to install the Klone Operator is using Helm from our published chart repository.
+
+#### Step 1: Add the Helm Repository
+
+```bash
+# Add the Klone Helm repository
+helm repo add klone https://raghavendiran-2002.github.io/klone/helm-charts
+helm repo update
+```
+
+#### Step 2: Install the Operator
+
+```bash
+# Install the chart
+helm install klone-operator klone/klone-operator \
+  --namespace klone \
+  --create-namespace
+```
+
+This will:
+- Create the `klone` namespace
+- Install the KloneCluster CRD
+- Deploy the operator controller manager
+- Set up necessary RBAC roles and service accounts
+
+#### Step 3: Verify Installation
+
+Check that the operator is running:
+
+```bash
+kubectl get pods -n klone
+
+# Expected output:
+# NAME                                          READY   STATUS    RESTARTS   AGE
+# klone-operator-controller-manager-xxxxx-xxx   2/2     Running   0          1m
+```
+
+View operator logs:
+
+```bash
+kubectl logs -n klone -l control-plane=controller-manager -f
+```
+
+#### Optional: Customize Installation
+
+Create a `values.yaml` file with your custom configuration:
+
+```yaml
+controllerManager:
+  image:
+    tag: v1.0.52
+  resources:
+    limits:
+      cpu: 1000m
+      memory: 256Mi
+```
+
+Install with custom values:
+
+```bash
+helm install klone-operator klone/klone-operator \
+  --namespace klone \
+  --create-namespace \
+  -f values.yaml
+```
+
+#### Upgrade the Operator
+
+```bash
+helm repo update
+helm upgrade klone-operator klone/klone-operator --namespace klone
+```
+
+#### Uninstall the Operator
+
+```bash
+helm uninstall klone-operator --namespace klone
+```
+
+**Note:** CRDs are not deleted by default. To delete them manually:
+
+```bash
+kubectl delete crd kloneclusters.klone.klone.io
+```
+
+### Method 2: Deploy Using Kustomize
+
+This method uses pre-built images with kustomize manifests.
 
 #### Step 1: Clone the Repository
 
@@ -88,65 +175,24 @@ cd klone
 
 #### Step 2: Install CRDs
 
-Install the Custom Resource Definitions into your cluster:
-
 ```bash
 make install
 ```
 
-This creates the `KloneCluster` CRD in your cluster. Verify installation:
-
-```bash
-kubectl get crd kloneclusters.klone.klone.io
-```
-
 #### Step 3: Deploy the Operator
 
-Deploy the operator controller manager:
-
 ```bash
-IMG=raghavendiran2002/klone-operator:v1.0.24 make deploy
+IMG=raghavendiran2002/klone-operator:latest make deploy
 ```
-
-This will:
-- Create the `operator-system` namespace
-- Deploy the controller manager
-- Set up necessary RBAC roles and service accounts
 
 #### Step 4: Verify Installation
 
-Check that the operator is running:
-
 ```bash
 kubectl get pods -n operator-system
-
-# Expected output:
-# NAME                                          READY   STATUS    RESTARTS   AGE
-# operator-controller-manager-xxxxxxxxx-xxxxx   2/2     Running   0          1m
-```
-
-View operator logs:
-
-```bash
 kubectl logs -n operator-system -l control-plane=controller-manager -f
 ```
 
-#### Step 5: Deploy Dashboard (Optional)
-
-Deploy the web dashboard to visualize your clusters:
-
-```bash
-kubectl apply -f config/dashboard/deployment.yaml
-```
-
-Access the dashboard:
-
-```bash
-kubectl port-forward -n operator-system svc/klone-dashboard 8080:8080
-# Open http://localhost:8080 in your browser
-```
-
-### Method 2: Build and Deploy from Source
+### Method 3: Build and Deploy from Source
 
 #### Step 1: Clone and Build
 
