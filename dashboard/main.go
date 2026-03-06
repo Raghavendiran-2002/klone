@@ -61,9 +61,9 @@ func main() {
 	log.Fatal(http.ListenAndServe(":"+port, nil))
 }
 
-//////////////////////////////////////////////////////
+// ////////////////////////////////////////////////////
 // INIT K8S CLIENT
-//////////////////////////////////////////////////////
+// ////////////////////////////////////////////////////
 
 func initClient() error {
 	var config *rest.Config
@@ -82,9 +82,9 @@ func initClient() error {
 	return err
 }
 
-//////////////////////////////////////////////////////
+// ////////////////////////////////////////////////////
 // INDEX
-//////////////////////////////////////////////////////
+// ////////////////////////////////////////////////////
 
 func serveIndex(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path != "/" {
@@ -97,9 +97,9 @@ func serveIndex(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-//////////////////////////////////////////////////////
+// ////////////////////////////////////////////////////
 // CLUSTERS
-//////////////////////////////////////////////////////
+// ////////////////////////////////////////////////////
 
 func clustersHandler(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
@@ -112,7 +112,7 @@ func clustersHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func listClusters(w http.ResponseWriter, r *http.Request) {
+func listClusters(w http.ResponseWriter, _ *http.Request) {
 	clusterList := &klonev1alpha1.KloneClusterList{}
 	if err := k8sClient.List(context.Background(), clusterList); err != nil {
 		http.Error(w, err.Error(), 500)
@@ -162,7 +162,7 @@ func clusterHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func getCluster(w http.ResponseWriter, r *http.Request, namespace, name string) {
+func getCluster(w http.ResponseWriter, _ *http.Request, namespace, name string) {
 	cluster := &klonev1alpha1.KloneCluster{}
 	if err := k8sClient.Get(context.Background(), client.ObjectKey{
 		Name:      name,
@@ -178,7 +178,7 @@ func getCluster(w http.ResponseWriter, r *http.Request, namespace, name string) 
 	}
 }
 
-func deleteCluster(w http.ResponseWriter, r *http.Request, namespace, name string) {
+func deleteCluster(w http.ResponseWriter, _ *http.Request, namespace, name string) {
 	cluster := &klonev1alpha1.KloneCluster{}
 	if err := k8sClient.Get(context.Background(), client.ObjectKey{
 		Name:      name,
@@ -331,7 +331,7 @@ func getPodRestarts(pod *corev1.Pod) int32 {
 // getNodeMetrics fetches node metrics from metrics-server API
 // If namespace is empty, it fetches host cluster metrics
 // If namespace is provided, it fetches metrics from that nested K3s cluster
-func getNodeMetrics(ctx context.Context, namespace string) (map[string]interface{}, error) {
+func getNodeMetrics(ctx context.Context, _ string) (map[string]any, error) {
 	config, err := rest.InClusterConfig()
 	if err != nil {
 		kubeconfig := filepath.Join(os.Getenv("HOME"), ".kube", "config")
@@ -351,7 +351,7 @@ func getNodeMetrics(ctx context.Context, namespace string) (map[string]interface
 		InsecureSkipVerify: true, // Skip verification for metrics server
 	}
 
-	client := &http.Client{
+	httpClient := &http.Client{
 		Transport: &http.Transport{
 			TLSClientConfig: tlsConfig,
 		},
@@ -371,7 +371,7 @@ func getNodeMetrics(ctx context.Context, namespace string) (map[string]interface
 		req.Header.Set("Authorization", "Bearer "+config.BearerToken)
 	}
 
-	resp, err := client.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -385,25 +385,25 @@ func getNodeMetrics(ctx context.Context, namespace string) (map[string]interface
 		return nil, fmt.Errorf("metrics API returned status %d", resp.StatusCode)
 	}
 
-	var result map[string]interface{}
+	var result map[string]any
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return nil, err
 	}
 
 	// Parse node metrics
-	items, ok := result["items"].([]interface{})
+	items, ok := result["items"].([]any)
 	if !ok {
 		return nil, fmt.Errorf("invalid metrics response format")
 	}
 
-	nodeMetrics := make(map[string]map[string]interface{})
+	nodeMetrics := make(map[string]map[string]any)
 	var totalCPU, totalMemory int64
 
 	for _, item := range items {
-		node := item.(map[string]interface{})
-		metadata := node["metadata"].(map[string]interface{})
+		node := item.(map[string]any)
+		metadata := node["metadata"].(map[string]any)
 		nodeName := metadata["name"].(string)
-		usage := node["usage"].(map[string]interface{})
+		usage := node["usage"].(map[string]any)
 
 		// Parse CPU (in nanocores)
 		cpuStr := usage["cpu"].(string)
@@ -413,7 +413,7 @@ func getNodeMetrics(ctx context.Context, namespace string) (map[string]interface
 		memStr := usage["memory"].(string)
 		mem := parseQuantity(memStr)
 
-		nodeMetrics[nodeName] = map[string]interface{}{
+		nodeMetrics[nodeName] = map[string]any{
 			"cpu":      cpuStr,
 			"cpuCores": float64(cpu) / 1000000000.0, // Convert nanocores to cores
 			"memory":   memStr,
@@ -424,7 +424,7 @@ func getNodeMetrics(ctx context.Context, namespace string) (map[string]interface
 		totalMemory += mem
 	}
 
-	return map[string]interface{}{
+	return map[string]any{
 		"nodes":       nodeMetrics,
 		"totalCPU":    float64(totalCPU) / 1000000000.0,
 		"totalMemory": totalMemory / 1024 / 1024,
@@ -438,23 +438,18 @@ func parseQuantity(s string) int64 {
 
 	// Handle suffix
 	multiplier := int64(1)
-	if strings.HasSuffix(s, "n") {
-		s = strings.TrimSuffix(s, "n")
+	var found bool
+	if s, found = strings.CutSuffix(s, "n"); found {
 		multiplier = 1
-	} else if strings.HasSuffix(s, "u") {
-		s = strings.TrimSuffix(s, "u")
+	} else if s, found = strings.CutSuffix(s, "u"); found {
 		multiplier = 1000
-	} else if strings.HasSuffix(s, "m") {
-		s = strings.TrimSuffix(s, "m")
+	} else if s, found = strings.CutSuffix(s, "m"); found {
 		multiplier = 1000000
-	} else if strings.HasSuffix(s, "Ki") {
-		s = strings.TrimSuffix(s, "Ki")
+	} else if s, found = strings.CutSuffix(s, "Ki"); found {
 		multiplier = 1024
-	} else if strings.HasSuffix(s, "Mi") {
-		s = strings.TrimSuffix(s, "Mi")
+	} else if s, found = strings.CutSuffix(s, "Mi"); found {
 		multiplier = 1024 * 1024
-	} else if strings.HasSuffix(s, "Gi") {
-		s = strings.TrimSuffix(s, "Gi")
+	} else if s, found = strings.CutSuffix(s, "Gi"); found {
 		multiplier = 1024 * 1024 * 1024
 	}
 
@@ -613,7 +608,7 @@ func createCluster(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	if err := json.NewEncoder(w).Encode(map[string]interface{}{
+	if err := json.NewEncoder(w).Encode(map[string]any{
 		"message":   "Cluster created successfully",
 		"name":      req.Name,
 		"namespace": req.Namespace,
@@ -622,9 +617,9 @@ func createCluster(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-//////////////////////////////////////////////////////
+// ////////////////////////////////////////////////////
 // HOST METRICS
-//////////////////////////////////////////////////////
+// ////////////////////////////////////////////////////
 
 func hostMetrics(w http.ResponseWriter, r *http.Request) {
 	// Get host cluster node metrics from metrics-server
@@ -640,7 +635,7 @@ func hostMetrics(w http.ResponseWriter, r *http.Request) {
 	// Try to get node metrics from metrics-server API
 	nodeMetrics, err := getNodeMetrics(ctx, "")
 
-	data := map[string]interface{}{
+	data := map[string]any{
 		"nodes":            len(nodes.Items),
 		"timestamp":        time.Now(),
 		"metricsAvailable": err == nil,
@@ -658,12 +653,12 @@ func hostMetrics(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-//////////////////////////////////////////////////////
+// ////////////////////////////////////////////////////
 // CLUSTER METRICS
-//////////////////////////////////////////////////////
+// ////////////////////////////////////////////////////
 
 // getK3sClusterMetrics execs into the terminal pod and fetches metrics from the nested K3s cluster
-func getK3sClusterMetrics(ctx context.Context, namespace string) (map[string]interface{}, error) {
+func getK3sClusterMetrics(ctx context.Context, namespace string) (map[string]any, error) {
 	// Find the terminal pod
 	pods := &corev1.PodList{}
 	err := k8sClient.List(ctx, pods, client.InNamespace(namespace), client.MatchingLabels{"app": "klone-terminal"})
@@ -698,7 +693,7 @@ func getK3sClusterMetrics(ctx context.Context, namespace string) (map[string]int
 
 	output = strings.TrimSpace(output)
 	if output == "" || output == "METRICS_UNAVAILABLE" {
-		return map[string]interface{}{
+		return map[string]any{
 			"available": false,
 			"error":     "Metrics unavailable - metrics-server may not be ready",
 		}, nil
@@ -746,13 +741,13 @@ func execInPod(ctx context.Context, clientset *kubernetes.Clientset, config *res
 // parseK3sMetrics parses kubectl top nodes output
 // Expected format: "node-name   CPU(cores)   CPU%   MEMORY(bytes)   MEMORY%"
 // Example: "k3s-server-0   100m   5%   500Mi   10%"
-func parseK3sMetrics(output string) map[string]interface{} {
+func parseK3sMetrics(output string) map[string]any {
 	lines := strings.Split(strings.TrimSpace(output), "\n")
 
 	totalCPU := 0.0
 	totalMemory := 0.0
 	nodeCount := 0
-	nodes := make(map[string]interface{})
+	nodes := make(map[string]any)
 
 	for _, line := range lines {
 		fields := strings.Fields(line)
@@ -769,7 +764,7 @@ func parseK3sMetrics(output string) map[string]interface{} {
 		// Parse Memory (e.g., "500Mi" = 500 MiB)
 		mem := parseResourceValue(memStr)
 
-		nodes[nodeName] = map[string]interface{}{
+		nodes[nodeName] = map[string]any{
 			"cpu":    cpuStr,
 			"memory": memStr,
 		}
@@ -793,7 +788,7 @@ func parseK3sMetrics(output string) map[string]interface{} {
 		memPercent = (totalMemory / estimatedTotalMemory) * 100
 	}
 
-	return map[string]interface{}{
+	return map[string]any{
 		"nodeCount":     nodeCount,
 		"nodes":         nodes,
 		"totalCPU":      totalCPU,
@@ -811,22 +806,22 @@ func parseResourceValue(s string) float64 {
 	}
 
 	// Handle CPU millicores (e.g., "100m" = 0.1)
-	if strings.HasSuffix(s, "m") {
-		val, _ := strconv.ParseFloat(strings.TrimSuffix(s, "m"), 64)
+	if trimmed, found := strings.CutSuffix(s, "m"); found {
+		val, _ := strconv.ParseFloat(trimmed, 64)
 		return val / 1000.0
 	}
 
 	// Handle memory units
-	if strings.HasSuffix(s, "Ki") {
-		val, _ := strconv.ParseFloat(strings.TrimSuffix(s, "Ki"), 64)
+	if trimmed, found := strings.CutSuffix(s, "Ki"); found {
+		val, _ := strconv.ParseFloat(trimmed, 64)
 		return val / 1024.0 // Convert to MiB
 	}
-	if strings.HasSuffix(s, "Mi") {
-		val, _ := strconv.ParseFloat(strings.TrimSuffix(s, "Mi"), 64)
+	if trimmed, found := strings.CutSuffix(s, "Mi"); found {
+		val, _ := strconv.ParseFloat(trimmed, 64)
 		return val
 	}
-	if strings.HasSuffix(s, "Gi") {
-		val, _ := strconv.ParseFloat(strings.TrimSuffix(s, "Gi"), 64)
+	if trimmed, found := strings.CutSuffix(s, "Gi"); found {
+		val, _ := strconv.ParseFloat(trimmed, 64)
 		return val * 1024.0 // Convert to MiB
 	}
 
@@ -951,9 +946,9 @@ func clusterMetrics(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-//////////////////////////////////////////////////////
+// ////////////////////////////////////////////////////
 // TERMINAL PROXY
-//////////////////////////////////////////////////////
+// ////////////////////////////////////////////////////
 
 func proxyTerminal(w http.ResponseWriter, r *http.Request) {
 	pathParts := strings.Split(strings.TrimPrefix(r.URL.Path, "/api/terminal/"), "/")
@@ -1014,9 +1009,9 @@ func proxyTerminal(w http.ResponseWriter, r *http.Request) {
 	proxy.ServeHTTP(w, r)
 }
 
-//////////////////////////////////////////////////////
+// ////////////////////////////////////////////////////
 // HTML
-//////////////////////////////////////////////////////
+// ////////////////////////////////////////////////////
 
 //nolint:lll // HTML content with long lines
 func getIndexHTML() string {

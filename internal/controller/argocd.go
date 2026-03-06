@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
-	"strings"
+	"maps"
 
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
@@ -118,9 +118,7 @@ func GetClusterLabels(cluster *klonev1alpha1.KloneCluster) map[string]string {
 
 	// Add custom labels if specified
 	if cluster.Spec.ArgoCD != nil && cluster.Spec.ArgoCD.Labels != nil {
-		for k, v := range cluster.Spec.ArgoCD.Labels {
-			labels[k] = v
-		}
+		maps.Copy(labels, cluster.Spec.ArgoCD.Labels)
 	}
 
 	return labels
@@ -335,162 +333,7 @@ func BuildArgoCDSecretReaderRoleBinding(cluster *klonev1alpha1.KloneCluster) *rb
 }
 
 // buildImportHostArgoCDRepositorySecrets generates commands to import repository secrets from host cluster
-func buildImportHostArgoCDRepositorySecrets(cluster *klonev1alpha1.KloneCluster) string {
-	argoCDNamespace := ArgoCDNamespaceDefault
-	if cluster.Spec.ArgoCD != nil && cluster.Spec.ArgoCD.Namespace != "" {
-		argoCDNamespace = cluster.Spec.ArgoCD.Namespace
-	}
-
-	// Generate script to copy secrets from host cluster to nested cluster
-	return fmt.Sprintf(`echo "==== Importing ArgoCD repository secrets from host cluster ===="
-
-# Debug: Check if we can access host cluster's argocd namespace
-echo "Checking access to host cluster's %s namespace..."
-if ! kubectl get namespace %s > /dev/null 2>&1; then
-  echo "WARNING: Cannot access %s namespace in host cluster"
-  echo "ArgoCD may not be installed in the host cluster"
-else
-  echo "Successfully accessed %s namespace in host cluster"
-fi
-
-# Get count of repository secrets in host cluster
-echo "Searching for repository secrets in host cluster..."
-SECRET_COUNT=$(kubectl get secrets -n %s -l argocd.argoproj.io/secret-type=repository --no-headers 2>/dev/null | wc -l | tr -d ' ')
-
-if [ "$SECRET_COUNT" -gt 0 ]; then
-  echo "Found $SECRET_COUNT repository secret(s) in host cluster"
-
-  # List all secrets found
-  echo "Secrets to import:"
-  kubectl get secrets -n %s -l argocd.argoproj.io/secret-type=repository -o name 2>/dev/null
-
-  # Get each secret and import to nested cluster
-  kubectl get secrets -n %s -l argocd.argoproj.io/secret-type=repository -o name 2>/dev/null | while read -r secret_name; do
-    SECRET_NAME=$(echo "$secret_name" | cut -d/ -f2)
-    echo ""
-    echo "Processing secret: $SECRET_NAME"
-
-    # Get secret as YAML
-    echo "Fetching secret from host cluster..."
-    SECRET_YAML=$(kubectl get secret "$SECRET_NAME" -n %s -o yaml 2>&1)
-    if [ $? -ne 0 ]; then
-      echo "ERROR: Failed to fetch secret $SECRET_NAME from host cluster"
-      echo "$SECRET_YAML"
-      continue
-    fi
-
-    # Transform and apply to nested cluster
-    echo "Applying secret to nested cluster..."
-    echo "$SECRET_YAML" | \
-      sed 's/namespace: .*/namespace: argocd/' | \
-      sed '/resourceVersion:/d' | \
-      sed '/uid:/d' | \
-      sed '/creationTimestamp:/d' | \
-      sed '/ownerReferences:/,+10d' | \
-      kubectl exec -i -n %s $TERMINAL_POD -c terminal -- kubectl apply -f - 2>&1
-
-    if [ $? -eq 0 ]; then
-      echo "✓ Successfully imported: $SECRET_NAME"
-    else
-      echo "✗ Failed to import: $SECRET_NAME"
-    fi
-  done
-
-  echo ""
-  echo "Completed processing $SECRET_COUNT repository secret(s)"
-
-  # Verify secrets in nested cluster
-  echo ""
-  echo "Verifying secrets in nested cluster..."
-  kubectl exec -n %s $TERMINAL_POD -c terminal -- kubectl get secrets -n argocd -l argocd.argoproj.io/secret-type=repository 2>&1 || echo "Warning: Could not verify secrets in nested cluster"
-else
-  echo "No repository secrets found in host cluster to import"
-  echo "If you expected to find secrets, please check:"
-  echo "  1. ArgoCD is installed in namespace: %s"
-  echo "  2. Repository secrets exist with label: argocd.argoproj.io/secret-type=repository"
-  echo "  3. The service account has permission to read secrets from that namespace"
-fi
-
-echo "==== Secret import process complete ===="
-`, argoCDNamespace, argoCDNamespace, argoCDNamespace, argoCDNamespace, argoCDNamespace, argoCDNamespace, argoCDNamespace, argoCDNamespace, cluster.Status.Namespace, cluster.Status.Namespace, argoCDNamespace)
-}
-
 // buildArgoCDRepositorySecrets generates kubectl commands to create repository secrets
-func buildArgoCDRepositorySecrets(cluster *klonev1alpha1.KloneCluster) string {
-	var commands []string
-
-	// First, import secrets from host cluster
-	commands = append(commands, buildImportHostArgoCDRepositorySecrets(cluster))
-
-	// Then, create any additional secrets defined in the spec
-	if cluster.Spec.ArgoCD != nil && len(cluster.Spec.ArgoCD.Repositories) > 0 {
-		commands = append(commands, "\necho \"Creating additional repository secrets from spec...\"")
-
-		for i, repo := range cluster.Spec.ArgoCD.Repositories {
-			secretName := repo.Name
-			if secretName == "" {
-				secretName = fmt.Sprintf("repo-%d", i)
-			}
-
-			// Build secret data based on authentication method
-			var secretData string
-			if repo.SSHPrivateKey != "" {
-				// SSH-based authentication
-				secretData = fmt.Sprintf(`  url: %s
-  sshPrivateKey: |
-%s
-  type: %s`, repo.URL, indentString(repo.SSHPrivateKey, 4), repo.Type)
-			} else {
-				// HTTPS-based authentication
-				secretData = fmt.Sprintf(`  url: %s`, repo.URL)
-				if repo.Username != "" {
-					secretData += fmt.Sprintf(`
-  username: %s`, repo.Username)
-				}
-				if repo.Password != "" {
-					secretData += fmt.Sprintf(`
-  password: %s`, repo.Password)
-				}
-				secretData += fmt.Sprintf(`
-  type: %s`, repo.Type)
-			}
-
-			secretYAML := fmt.Sprintf(`cat <<'REPOSECRET' | kubectl apply -f -
-apiVersion: v1
-kind: Secret
-metadata:
-  name: %s
-  namespace: argocd
-  labels:
-    argocd.argoproj.io/secret-type: repository
-type: Opaque
-stringData:
-%s
-REPOSECRET`, secretName, secretData)
-
-			commands = append(commands, fmt.Sprintf(`echo "Creating repository secret: %s"
-%s`, secretName, secretYAML))
-		}
-	}
-
-	if len(commands) == 0 {
-		return "echo \"No repository secrets to create\""
-	}
-
-	return strings.Join(commands, "\n")
-}
-
-// indentString indents each line of a string by the specified number of spaces
-func indentString(s string, spaces int) string {
-	indent := strings.Repeat(" ", spaces)
-	lines := strings.Split(s, "\n")
-	for i, line := range lines {
-		if line != "" {
-			lines[i] = indent + line
-		}
-	}
-	return strings.Join(lines, "\n")
-}
 
 // NOTE: ArgoCD Helm installation has been removed.
 // The operator now only handles cluster registration/deregistration with existing ArgoCD instances.
