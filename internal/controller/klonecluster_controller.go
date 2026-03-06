@@ -37,6 +37,11 @@ import (
 	klonev1alpha1 "github.com/klone/operator/api/v1alpha1"
 )
 
+const (
+	// ArgoCDNamespaceDefault is the default namespace for ArgoCD
+	ArgoCDNamespaceDefault = "argocd"
+)
+
 // KloneClusterReconciler reconciles a KloneCluster object
 type KloneClusterReconciler struct {
 	client.Client
@@ -150,6 +155,8 @@ func (r *KloneClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request
 }
 
 // reconcileResources ensures all cluster resources exist
+//
+//nolint:gocyclo // Complex reconciliation logic required
 func (r *KloneClusterReconciler) reconcileResources(ctx context.Context, cluster *klonev1alpha1.KloneCluster) error {
 	log := logf.FromContext(ctx)
 
@@ -635,7 +642,7 @@ func (r *KloneClusterReconciler) handleDeletion(ctx context.Context, cluster *kl
 		// Delete ArgoCD secret reader RBAC resources in argocd namespace
 		// DISABLED: Secret importing functionality removed
 		/*
-			argoCDNamespace := "argocd"
+			argoCDNamespace := ArgoCDNamespaceDefault
 			if cluster.Spec.ArgoCD != nil && cluster.Spec.ArgoCD.Namespace != "" {
 				argoCDNamespace = cluster.Spec.ArgoCD.Namespace
 			}
@@ -791,7 +798,7 @@ func (r *KloneClusterReconciler) unregisterFromArgoCD(ctx context.Context, clust
 	log := logf.FromContext(ctx)
 
 	// Determine ArgoCD namespace
-	argoCDNamespace := "argocd"
+	argoCDNamespace := ArgoCDNamespaceDefault
 	if cluster.Spec.ArgoCD != nil && cluster.Spec.ArgoCD.Namespace != "" {
 		argoCDNamespace = cluster.Spec.ArgoCD.Namespace
 	}

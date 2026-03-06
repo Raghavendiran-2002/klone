@@ -130,7 +130,7 @@ func GetClusterLabels(cluster *klonev1alpha1.KloneCluster) map[string]string {
 // based on spec configuration and auto-detection
 func ShouldRegisterWithArgoCD(ctx context.Context, c client.Client, cluster *klonev1alpha1.KloneCluster) (bool, string, error) {
 	// Determine ArgoCD namespace
-	argoCDNamespace := "argocd"
+	argoCDNamespace := ArgoCDNamespaceDefault
 	if cluster.Spec.ArgoCD != nil && cluster.Spec.ArgoCD.Namespace != "" {
 		argoCDNamespace = cluster.Spec.ArgoCD.Namespace
 	}
@@ -274,7 +274,7 @@ func BuildArgoCDCRDRoleBinding(cluster *klonev1alpha1.KloneCluster) *rbacv1.Role
 
 // BuildArgoCDSecretReaderRole creates a Role in argocd namespace for reading repository secrets
 func BuildArgoCDSecretReaderRole(cluster *klonev1alpha1.KloneCluster) *rbacv1.Role {
-	argoCDNamespace := "argocd"
+	argoCDNamespace := ArgoCDNamespaceDefault
 	if cluster.Spec.ArgoCD != nil && cluster.Spec.ArgoCD.Namespace != "" {
 		argoCDNamespace = cluster.Spec.ArgoCD.Namespace
 	}
@@ -300,7 +300,7 @@ func BuildArgoCDSecretReaderRole(cluster *klonev1alpha1.KloneCluster) *rbacv1.Ro
 
 // BuildArgoCDSecretReaderRoleBinding creates a RoleBinding in argocd namespace
 func BuildArgoCDSecretReaderRoleBinding(cluster *klonev1alpha1.KloneCluster) *rbacv1.RoleBinding {
-	argoCDNamespace := "argocd"
+	argoCDNamespace := ArgoCDNamespaceDefault
 	if cluster.Spec.ArgoCD != nil && cluster.Spec.ArgoCD.Namespace != "" {
 		argoCDNamespace = cluster.Spec.ArgoCD.Namespace
 	}
@@ -336,7 +336,7 @@ func BuildArgoCDSecretReaderRoleBinding(cluster *klonev1alpha1.KloneCluster) *rb
 
 // buildImportHostArgoCDRepositorySecrets generates commands to import repository secrets from host cluster
 func buildImportHostArgoCDRepositorySecrets(cluster *klonev1alpha1.KloneCluster) string {
-	argoCDNamespace := "argocd"
+	argoCDNamespace := ArgoCDNamespaceDefault
 	if cluster.Spec.ArgoCD != nil && cluster.Spec.ArgoCD.Namespace != "" {
 		argoCDNamespace = cluster.Spec.ArgoCD.Namespace
 	}

@@ -92,7 +92,9 @@ func serveIndex(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "text/html")
-	w.Write([]byte(getIndexHTML()))
+	if _, err := w.Write([]byte(getIndexHTML())); err != nil {
+		http.Error(w, "Failed to write response", http.StatusInternalServerError)
+	}
 }
 
 //////////////////////////////////////////////////////
@@ -116,7 +118,9 @@ func listClusters(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), 500)
 		return
 	}
-	json.NewEncoder(w).Encode(clusterList)
+	if err := json.NewEncoder(w).Encode(clusterList); err != nil {
+		http.Error(w, "Failed to encode response", http.StatusInternalServerError)
+	}
 }
 
 func clusterHandler(w http.ResponseWriter, r *http.Request) {
@@ -169,7 +173,9 @@ func getCluster(w http.ResponseWriter, r *http.Request, namespace, name string) 
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(cluster)
+	if err := json.NewEncoder(w).Encode(cluster); err != nil {
+		http.Error(w, "Failed to encode response", http.StatusInternalServerError)
+	}
 }
 
 func deleteCluster(w http.ResponseWriter, r *http.Request, namespace, name string) {
@@ -188,11 +194,13 @@ func deleteCluster(w http.ResponseWriter, r *http.Request, namespace, name strin
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{
+	if err := json.NewEncoder(w).Encode(map[string]any{
 		"message":   "Cluster deletion initiated",
 		"name":      name,
 		"namespace": namespace,
-	})
+	}); err != nil {
+		http.Error(w, "Failed to encode response", http.StatusInternalServerError)
+	}
 }
 
 func scaleCluster(w http.ResponseWriter, r *http.Request, namespace, name string) {
@@ -236,12 +244,14 @@ func scaleCluster(w http.ResponseWriter, r *http.Request, namespace, name string
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{
+	if err := json.NewEncoder(w).Encode(map[string]any{
 		"message":        "Cluster scaled successfully",
 		"name":           name,
 		"namespace":      namespace,
 		"workerReplicas": *req.WorkerReplicas,
-	})
+	}); err != nil {
+		http.Error(w, "Failed to encode response", http.StatusInternalServerError)
+	}
 }
 
 func getClusterLogs(w http.ResponseWriter, r *http.Request, namespace, name string) {
@@ -292,11 +302,13 @@ func getClusterLogs(w http.ResponseWriter, r *http.Request, namespace, name stri
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{
+	if err := json.NewEncoder(w).Encode(map[string]any{
 		"clusterName": name,
 		"namespace":   clusterNs,
 		"pods":        logEntries,
-	})
+	}); err != nil {
+		http.Error(w, "Failed to encode response", http.StatusInternalServerError)
+	}
 }
 
 func isPodReady(pod *corev1.Pod) bool {
@@ -363,7 +375,11 @@ func getNodeMetrics(ctx context.Context, namespace string) (map[string]interface
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			fmt.Printf("Warning: failed to close response body: %v\n", err)
+		}
+	}()
 
 	if resp.StatusCode != 200 {
 		return nil, fmt.Errorf("metrics API returned status %d", resp.StatusCode)
@@ -444,7 +460,9 @@ func parseQuantity(s string) int64 {
 
 	// Parse the number
 	var value int64
-	fmt.Sscanf(s, "%d", &value)
+	if _, err := fmt.Sscanf(s, "%d", &value); err != nil {
+		return 0
+	}
 	return value * multiplier
 }
 
@@ -595,11 +613,13 @@ func createCluster(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	if err := json.NewEncoder(w).Encode(map[string]interface{}{
 		"message":   "Cluster created successfully",
 		"name":      req.Name,
 		"namespace": req.Namespace,
-	})
+	}); err != nil {
+		http.Error(w, "Failed to encode response", http.StatusInternalServerError)
+	}
 }
 
 //////////////////////////////////////////////////////
@@ -633,7 +653,9 @@ func hostMetrics(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(data)
+	if err := json.NewEncoder(w).Encode(data); err != nil {
+		http.Error(w, "Failed to encode response", http.StatusInternalServerError)
+	}
 }
 
 //////////////////////////////////////////////////////
@@ -668,7 +690,8 @@ func getK3sClusterMetrics(ctx context.Context, namespace string) (map[string]int
 	}
 
 	// Execute kubectl top nodes command in the terminal pod
-	output, err := execInPod(ctx, clientset, config, namespace, terminalPod, "terminal", []string{"sh", "-c", "kubectl top nodes --no-headers 2>/dev/null || echo 'METRICS_UNAVAILABLE'"})
+	output, err := execInPod(ctx, clientset, config, namespace, terminalPod, "terminal",
+		[]string{"sh", "-c", "kubectl top nodes --no-headers 2>/dev/null || echo 'METRICS_UNAVAILABLE'"})
 	if err != nil {
 		return nil, fmt.Errorf("failed to exec kubectl top nodes: %w", err)
 	}
@@ -688,7 +711,8 @@ func getK3sClusterMetrics(ctx context.Context, namespace string) (map[string]int
 }
 
 // execInPod executes a command in a pod and returns the output
-func execInPod(ctx context.Context, clientset *kubernetes.Clientset, config *rest.Config, namespace, podName, container string, command []string) (string, error) {
+func execInPod(ctx context.Context, clientset *kubernetes.Clientset, config *rest.Config,
+	namespace, podName, container string, command []string) (string, error) {
 	req := clientset.CoreV1().RESTClient().Post().
 		Resource("pods").
 		Name(podName).
@@ -837,10 +861,10 @@ func clusterMetrics(w http.ResponseWriter, r *http.Request) {
 	services := &corev1.ServiceList{}
 	pvcs := &corev1.PersistentVolumeClaimList{}
 
-	k8sClient.List(context.Background(), pods, client.InNamespace(ns))
-	k8sClient.List(context.Background(), deployments, client.InNamespace(ns))
-	k8sClient.List(context.Background(), services, client.InNamespace(ns))
-	k8sClient.List(context.Background(), pvcs, client.InNamespace(ns))
+	_ = k8sClient.List(context.Background(), pods, client.InNamespace(ns))
+	_ = k8sClient.List(context.Background(), deployments, client.InNamespace(ns))
+	_ = k8sClient.List(context.Background(), services, client.InNamespace(ns))
+	_ = k8sClient.List(context.Background(), pvcs, client.InNamespace(ns))
 
 	// Count pod states
 	runningPods := 0
@@ -895,7 +919,7 @@ func clusterMetrics(w http.ResponseWriter, r *http.Request) {
 	metricsAvailable := metricsErr == nil
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{
+	if err := json.NewEncoder(w).Encode(map[string]any{
 		"clusterName": name,
 		"phase":       cluster.Status.Phase,
 		"health":      health,
@@ -922,7 +946,9 @@ func clusterMetrics(w http.ResponseWriter, r *http.Request) {
 		"argoCD":           cluster.Status.ArgoCDRegistered,
 		"metrics":          k3sMetrics,
 		"metricsAvailable": metricsAvailable,
-	})
+	}); err != nil {
+		http.Error(w, "Failed to encode response", http.StatusInternalServerError)
+	}
 }
 
 //////////////////////////////////////////////////////
@@ -992,6 +1018,7 @@ func proxyTerminal(w http.ResponseWriter, r *http.Request) {
 // HTML
 //////////////////////////////////////////////////////
 
+//nolint:lll // HTML content with long lines
 func getIndexHTML() string {
 	return `<!DOCTYPE html>
 <html lang="en">
