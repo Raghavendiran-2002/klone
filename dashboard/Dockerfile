@@ -1,4 +1,6 @@
 FROM golang:1.25 AS builder
+ARG TARGETOS
+ARG TARGETARCH
 
 WORKDIR /workspace
 
@@ -10,8 +12,8 @@ RUN go mod download
 COPY api/ api/
 COPY dashboard/ dashboard/
 
-# Build dashboard binary
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+# Build dashboard binary with multi-arch support
+RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} \
     go build -a -o dashboard-bin ./dashboard
 
 # -------------------------

@@ -14,6 +14,19 @@ Klone is a Kubernetes Operator that enables you to deploy nested K3s clusters in
 
 ## Installation
 
+### Install from Helm Repository (Recommended)
+
+Add the Klone Helm repository and install the chart:
+
+```bash
+# Add the Helm repository
+helm repo add klone https://raghavendiran-2002.github.io/klone/helm-charts
+helm repo update
+
+# Install the chart
+helm install klone-operator klone/klone-operator --namespace klone --create-namespace
+```
+
 ### Install from Local Chart
 
 If you have cloned the repository:
@@ -21,19 +34,6 @@ If you have cloned the repository:
 ```bash
 # From the repository root
 helm install klone-operator ./helm/klone-operator --namespace klone --create-namespace
-```
-
-### Install from GitHub (Future - after packaging)
-
-Once the chart is packaged and published:
-
-```bash
-# Add the repository (example - update with actual repository URL)
-helm repo add klone https://raghavendiran-2002.github.io/klone/helm-charts
-helm repo update
-
-# Install the chart
-helm install klone-operator klone/klone-operator --namespace klone --create-namespace
 ```
 
 ## Configuration

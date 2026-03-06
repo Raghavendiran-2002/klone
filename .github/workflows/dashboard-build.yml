@@ -1,0 +1,130 @@
+name: Build and Push Dashboard Image
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'dashboard/**'
+      - 'api/**'
+      - '.github/workflows/dashboard-build.yml'
+  workflow_dispatch:
+
+env:
+  IMAGE_NAME: klone-dashboard
+  REGISTRY: docker.io
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check for relevant changes
+        id: check_changes
+        run: |
+          # If workflow_dispatch, always build
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            echo "should_build=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          # Check if any relevant files changed
+          if git diff --name-only HEAD^ HEAD | grep -E '^(dashboard/|api/)'; then
+            echo "should_build=true" >> $GITHUB_OUTPUT
+          else
+            echo "should_build=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Extract current version
+        if: steps.check_changes.outputs.should_build == 'true'
+        id: get_version
+        run: |
+          # Get current version from dashboard deployment
+          CURRENT_VERSION=$(grep 'image:.*klone-dashboard' config/dashboard/deployment.yaml | sed 's/.*://' | tr -d ' ')
+
+          # If no version found or just "latest", start with v1.0.12
+          if [ -z "$CURRENT_VERSION" ] || [ "$CURRENT_VERSION" == "latest" ]; then
+            CURRENT_VERSION="v1.0.12"
+          fi
+
+          # Remove 'v' prefix if present
+          CURRENT_VERSION="${CURRENT_VERSION#v}"
+          echo "current_version=$CURRENT_VERSION" >> $GITHUB_OUTPUT
+
+          # Increment patch version
+          IFS='.' read -ra VERSION_PARTS <<< "$CURRENT_VERSION"
+          MAJOR="${VERSION_PARTS[0]}"
+          MINOR="${VERSION_PARTS[1]}"
+          PATCH="${VERSION_PARTS[2]}"
+          NEW_PATCH=$((PATCH + 1))
+          NEW_VERSION="${MAJOR}.${MINOR}.${NEW_PATCH}"
+
+          echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
+          echo "new_tag=v$NEW_VERSION" >> $GITHUB_OUTPUT
+          echo "Building dashboard version: $NEW_VERSION"
+
+      - name: Set up QEMU
+        if: steps.check_changes.outputs.should_build == 'true'
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        if: steps.check_changes.outputs.should_build == 'true'
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        if: steps.check_changes.outputs.should_build == 'true'
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Build and push Docker image
+        if: steps.check_changes.outputs.should_build == 'true'
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./dashboard/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ${{ secrets.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:${{ steps.get_version.outputs.new_tag }}
+            ${{ secrets.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Update version in dashboard deployment
+        if: steps.check_changes.outputs.should_build == 'true'
+        run: |
+          NEW_TAG="${{ steps.get_version.outputs.new_tag }}"
+
+          # Update dashboard deployment image
+          sed -i "s|image: .*klone-dashboard:.*|image: ${{ secrets.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}:$NEW_TAG|" config/dashboard/deployment.yaml
+
+      - name: Commit and push version updates
+        if: steps.check_changes.outputs.should_build == 'true'
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+
+          git add config/dashboard/deployment.yaml
+
+          git commit -m "chore: Update dashboard to ${{ steps.get_version.outputs.new_tag }}" || echo "No changes to commit"
+          git push
+
+      - name: Create and push tag
+        if: steps.check_changes.outputs.should_build == 'true'
+        run: |
+          git tag "dashboard-${{ steps.get_version.outputs.new_tag }}"
+          git push origin "dashboard-${{ steps.get_version.outputs.new_tag }}"
+
+      - name: Skip build message
+        if: steps.check_changes.outputs.should_build != 'true'
+        run: echo "No relevant changes detected. Skipping build."
