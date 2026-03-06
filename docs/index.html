@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Klone Operator Helm Repository</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            line-height: 1.6;
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 40px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #2c3e50;
+            border-bottom: 3px solid #3498db;
+            padding-bottom: 10px;
+        }
+        h2 {
+            color: #34495e;
+            margin-top: 30px;
+        }
+        code {
+            background: #f8f9fa;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-family: 'Courier New', monospace;
+            color: #e74c3c;
+        }
+        pre {
+            background: #2c3e50;
+            color: #ecf0f1;
+            padding: 15px;
+            border-radius: 5px;
+            overflow-x: auto;
+        }
+        pre code {
+            background: none;
+            color: inherit;
+            padding: 0;
+        }
+        .note {
+            background: #e8f4fd;
+            border-left: 4px solid #3498db;
+            padding: 15px;
+            margin: 20px 0;
+        }
+        a {
+            color: #3498db;
+            text-decoration: none;
+        }
+        a:hover {
+            text-decoration: underline;
+        }
+        ul {
+            line-height: 1.8;
+        }
+        .badge {
+            display: inline-block;
+            padding: 3px 8px;
+            background: #3498db;
+            color: white;
+            border-radius: 3px;
+            font-size: 0.85em;
+            margin-left: 5px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Klone Operator Helm Repository</h1>
+
+        <p>Welcome to the official Helm repository for <strong>Klone Operator</strong> - a Kubernetes operator that enables you to deploy nested K3s clusters inside an existing Kubernetes cluster.</p>
+
+        <h2>Quick Start</h2>
+
+        <p>Add the Helm repository:</p>
+        <pre><code>helm repo add klone https://raghavendiran-2002.github.io/klone/helm/packages/
+helm repo update</code></pre>
+
+        <p>Install the Klone Operator:</p>
+        <pre><code>helm install klone-operator klone/klone-operator \
+  --namespace klone \
+  --create-namespace</code></pre>
+
+        <h2>What is Klone?</h2>
+
+        <p>Klone is a Kubernetes Operator that allows you to:</p>
+        <ul>
+            <li>Deploy nested K3s clusters with configurable control plane and worker nodes</li>
+            <li>Automatic CIDR allocation to prevent network conflicts</li>
+            <li>Web terminal access via ttyd with automatic kubeconfig provisioning</li>
+            <li>Multiple ingress options: Tailscale, AWS ALB, or none</li>
+            <li>Optional metrics-server auto-installation in nested clusters</li>
+        </ul>
+
+        <div class="note">
+            <strong>Note:</strong> Each KloneCluster creates an isolated k3s cluster with its own control plane, workers, and optional web terminal access.
+        </div>
+
+        <h2>Create Your First Cluster</h2>
+
+        <p>After installing the operator, create a KloneCluster resource:</p>
+        <pre><code>kubectl apply -f - &lt;&lt;EOF
+apiVersion: klone.klone.io/v1alpha1
+kind: KloneCluster
+metadata:
+  name: my-cluster
+spec:
+  controlPlane:
+    replicas: 1
+  workers:
+    replicas: 2
+  terminal:
+    enabled: true
+  ingress:
+    type: none
+EOF</code></pre>
+
+        <h2>Configuration</h2>
+
+        <p>Customize the installation with your own <code>values.yaml</code>:</p>
+        <pre><code>controllerManager:
+  image:
+    tag: v1.0.51
+  resources:
+    limits:
+      cpu: 1000m
+      memory: 256Mi</code></pre>
+
+        <p>Install with custom values:</p>
+        <pre><code>helm install klone-operator klone/klone-operator \
+  -f values.yaml \
+  --namespace klone \
+  --create-namespace</code></pre>
+
+        <h2>Available Charts</h2>
+
+        <ul>
+            <li><strong>klone-operator</strong> <span class="badge">v1.0.51</span> - The main operator chart</li>
+        </ul>
+
+        <h2>Resources</h2>
+
+        <ul>
+            <li><a href="https://github.com/Raghavendiran-2002/klone">GitHub Repository</a></li>
+            <li><a href="https://github.com/Raghavendiran-2002/klone/blob/main/README.md">Documentation</a></li>
+            <li><a href="https://github.com/Raghavendiran-2002/klone/issues">Issues</a></li>
+            <li><a href="helm/packages/index.yaml">Repository Index</a></li>
+        </ul>
+
+        <h2>Requirements</h2>
+
+        <ul>
+            <li>Kubernetes 1.19+</li>
+            <li>Helm 3.2.0+</li>
+            <li>Cluster admin permissions</li>
+        </ul>
+
+        <h2>Verification</h2>
+
+        <p>Check the operator is running:</p>
+        <pre><code>kubectl get pods -n klone</code></pre>
+
+        <p>View operator logs:</p>
+        <pre><code>kubectl logs -n klone -l control-plane=controller-manager -f</code></pre>
+
+        <p>Check your KloneCluster status:</p>
+        <pre><code>kubectl get klonecluster my-cluster -o yaml</code></pre>
+
+        <hr style="margin: 40px 0; border: none; border-top: 1px solid #ddd;">
+
+        <p style="text-align: center; color: #7f8c8d; font-size: 0.9em;">
+            Maintained by <a href="https://github.com/Raghavendiran-2002">Raghav</a> |
+            Licensed under Apache 2.0
+        </p>
+    </div>
+</body>
+</html>

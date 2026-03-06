@@ -1,0 +1,25 @@
+{{- if .Values.metrics.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "klone-operator.fullname" . }}-controller-manager-metrics-service
+  namespace: {{ include "klone-operator.namespace" . }}
+  labels:
+    {{- include "klone-operator.labels" . | nindent 4 }}
+    {{- with .Values.metrics.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  {{- with .Values.metrics.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ .Values.metrics.service.type }}
+  ports:
+  - name: https
+    port: {{ .Values.metrics.service.port }}
+    protocol: {{ .Values.metrics.service.protocol }}
+    targetPort: 8443
+  selector:
+    {{- include "klone-operator.selectorLabels" . | nindent 4 }}
+{{- end }}

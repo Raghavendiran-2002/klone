@@ -1,0 +1,19 @@
+apiVersion: v2
+name: klone-operator
+description: A Helm chart for Klone Operator - Deploy nested K3s clusters inside Kubernetes
+type: application
+version: 1.0.51
+appVersion: "v1.0.51"
+home: https://github.com/Raghavendiran-2002/klone
+sources:
+- https://github.com/Raghavendiran-2002/klone
+maintainers:
+- name: Raghav
+  email: raghavendiran46461@gmail.com
+keywords:
+- kubernetes
+- k3s
+- nested-clusters
+- operator
+- klone
+icon: https://k3s.io/img/k3s-logo-light.svg

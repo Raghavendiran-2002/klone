@@ -1,0 +1,154 @@
+# Default values for klone-operator
+# This is a YAML-formatted file.
+# Declare variables to be passed into your templates.
+
+# Namespace where the operator will be installed
+namespace: klone
+
+# Controller manager configuration
+controllerManager:
+  # Image configuration
+  image:
+    repository: raghavendiran2002/klone-operator
+    tag: v1.0.51
+    pullPolicy: IfNotPresent
+
+  # Replica count
+  replicaCount: 1
+
+  # Resource limits and requests
+  resources:
+    limits:
+      cpu: 500m
+      memory: 128Mi
+    requests:
+      cpu: 10m
+      memory: 64Mi
+
+  # Security context
+  securityContext:
+    runAsNonRoot: true
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities:
+      drop:
+      - "ALL"
+
+  # Pod security context
+  podSecurityContext:
+    runAsNonRoot: true
+    seccompProfile:
+      type: RuntimeDefault
+
+  # Leader election configuration
+  leaderElection:
+    enabled: true
+
+  # Health probe configuration
+  healthProbe:
+    bindAddress: ":8081"
+    livenessProbe:
+      initialDelaySeconds: 15
+      periodSeconds: 20
+    readinessProbe:
+      initialDelaySeconds: 5
+      periodSeconds: 10
+
+  # Node affinity (optional)
+  # Uncomment to specify node affinity
+  # affinity:
+  #   nodeAffinity:
+  #     requiredDuringSchedulingIgnoredDuringExecution:
+  #       nodeSelectorTerms:
+  #         - matchExpressions:
+  #           - key: kubernetes.io/arch
+  #             operator: In
+  #             values:
+  #               - amd64
+  #               - arm64
+  #           - key: kubernetes.io/os
+  #             operator: In
+  #             values:
+  #               - linux
+
+  # Node selector
+  nodeSelector: {}
+
+  # Tolerations
+  tolerations: []
+
+  # Additional labels for the deployment
+  labels: {}
+
+  # Additional annotations for the deployment
+  annotations: {}
+
+  # Additional pod labels
+  podLabels: {}
+
+  # Additional pod annotations
+  podAnnotations: {}
+
+# Service account configuration
+serviceAccount:
+  # Name of the service account
+  name: klone-controller-manager
+
+  # Additional labels for the service account
+  labels: {}
+
+  # Additional annotations for the service account
+  annotations: {}
+
+# Metrics service configuration
+metrics:
+  # Enable metrics service
+  enabled: true
+
+  # Service configuration
+  service:
+    type: ClusterIP
+    port: 8443
+    protocol: TCP
+
+  # Additional labels for the metrics service
+  labels: {}
+
+  # Additional annotations for the metrics service
+  annotations: {}
+
+# RBAC configuration
+rbac:
+  # Create RBAC resources
+  create: true
+
+  # Additional labels for RBAC resources
+  labels: {}
+
+  # Additional annotations for RBAC resources
+  annotations: {}
+
+# CRD configuration
+crds:
+  # Install CRDs
+  install: true
+
+  # Keep CRDs on chart uninstall
+  keep: true
+
+  # Additional labels for CRDs
+  labels: {}
+
+  # Additional annotations for CRDs
+  annotations: {}
+
+# Image pull secrets (if needed for private registries)
+imagePullSecrets: []
+
+# Common labels applied to all resources
+commonLabels:
+  app.kubernetes.io/name: klone-operator
+  app.kubernetes.io/managed-by: Helm
+
+# Common annotations applied to all resources
+commonAnnotations: {}
