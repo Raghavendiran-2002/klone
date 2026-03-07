@@ -1,276 +1,283 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance to Claude Code when working with the Klone Operator repository.
 
 ## Project Overview
 
-This is a Kubernetes Operator project that manages **KloneCluster** resources - a system for creating nested Kubernetes clusters inside an existing cluster using k3s. Each KloneCluster creates an isolated k3s cluster with its own control plane, workers, and optional web terminal access.
+**Klone Operator** is a Kubernetes Operator that creates nested Kubernetes clusters inside an existing cluster using k3s. It's designed for K8s training environments (similar to KodeKloud labs), enabling dynamic provisioning of isolated Kubernetes clusters for students or testing.
 
-**Key capabilities:**
-- Deploy nested k3s clusters with configurable control plane and worker nodes
-- Automatic CIDR allocation to prevent network conflicts between multiple clusters
-- Web terminal access via ttyd with automatic kubeconfig provisioning
+**Core Functionality:**
+- Deploy complete k3s clusters (control plane + workers) as pods within a parent cluster
+- Each nested cluster gets its own namespace, persistent storage, and unique network CIDRs
+- Web-based terminal access (ttyd) with pre-configured kubectl for instant access
 - Multiple ingress options: Tailscale, AWS ALB, or none
-- Optional metrics-server auto-installation in nested clusters
-- Web dashboard for visualizing and managing all KloneCluster resources
+- Optional metrics-server and ArgoCD integration
+- Declarative management via KloneCluster CRD
+
+**Architecture:**
+- Built with Kubebuilder v4
+- Controller split across multiple files for maintainability
+- Automatic CIDR allocation prevents IP conflicts between nested clusters
+- Finalizers ensure graceful cleanup of all child resources
+- Web dashboard for visualizing cluster health and status
+
+**Use Case:** Training environments where each student/team needs an isolated Kubernetes cluster with full admin access, without requiring separate physical/cloud infrastructure per cluster.
+
+## Version Management
+
+**Current Versioning:**
+- Operator: `v1.0.52` (semantic versioning: MAJOR.MINOR.PATCH)
+- Dashboard: `v1.0.12`
+- Helm Chart: `1.0.52` (matches operator, strips 'v' prefix)
+- Docker Registry: `raghavendiran2002/klone-operator` and `raghavendiran2002/klone-dashboard`
+
+**Critical: Version files must stay synchronized**
+
+When updating versions, these 4 files MUST be updated together:
+1. `helm/klone-operator/Chart.yaml` - Lines 5-6 (version + appVersion)
+2. `helm/klone-operator/values.yaml` - Line 13 (image.tag)
+3. `config/manager/kustomization.yaml` - Line 8 (newTag)
+4. `config/dashboard/deployment.yaml` - Line 21 (image tag) - Only for dashboard releases
+
+**Helm Chart Version Strategy:**
+- Chart version = operator version (both increment together)
+- Chart uses `1.0.52` (no 'v'), appVersion uses `"v1.0.52"` (with 'v')
+
+## Build and Deploy Workflow
+
+**Standard Development Flow:**
+```bash
+# If api/ directory changed, regenerate CRDs and code
+make manifests generate fmt
+
+# Build multi-arch image (amd64 + arm64) and deploy
+IMG=raghavendiran2002/klone-operator:v1.0.52 make docker-build deploy
+
+# Dashboard build (separate)
+docker buildx build --platform linux/amd64,linux/arm64 \
+  -t raghavendiran2002/klone-dashboard:v1.0.12 \
+  -f dashboard/Dockerfile --push .
+```
+
+**IMPORTANT: Multi-Architecture Builds**
+- Always build for both amd64 and arm64 using buildx
+- This is required for M-series Mac support and AWS Graviton instances
+- The `make docker-build` target handles this automatically
+
+**Key Make Targets:**
+- `make manifests` - Regenerate CRDs from api/ types (run after changing *_types.go)
+- `make generate` - Regenerate DeepCopy methods (run after changing *_types.go)
+- `make fmt` - Format Go code
+- `make test` - Run unit tests with envtest
+- `make build` - Build manager binary to bin/manager
+- `make install` - Install CRDs to cluster
+- `make deploy IMG=...` - Deploy operator to cluster
+- `make docker-build IMG=...` - Build and push multi-arch Docker image
+
+**Pre-build Detection:**
+- If `api/v1alpha1/` files changed: MUST run `make manifests generate` before building
+- This regenerates CRD YAML and Go code
+- Skipping this causes deployment failures due to CRD/code mismatch
 
 ## Project Structure
 
-This is a **Kubebuilder v4** project using the standard single-group layout:
-
 ```
-klone/                         (repository root)
-├── .github/                   GitHub workflows and issue templates
-│   ├── workflows/             CI/CD workflows
-│   └── ISSUE_TEMPLATE/        Bug reports and feature requests
-├── api/v1alpha1/              CRD definitions (KloneCluster)
-├── cmd/                       Entry points
-├── config/                    Kubernetes manifests and kustomize configs
-│   ├── crd/bases/             Generated CRDs (DO NOT EDIT)
-│   ├── rbac/                  Generated RBAC + static roles
-│   ├── samples/               Example KloneCluster CRs
-│   ├── dashboard/             Dashboard deployment manifests
-│   └── default/               Default kustomize overlay
-├── dashboard/                 Web dashboard Go application
-├── docs/                      Additional documentation
-├── examples/                  Sample KloneCluster manifests
-├── internal/controller/       Reconciliation logic (split across multiple files)
-├── test/                      Unit and E2E tests
-├── CLAUDE.md                  This file
-├── CONTRIBUTING.md            Contribution guidelines
-├── LICENSE                    Apache 2.0 License
-├── Makefile                   Build, test, and deployment targets
-└── README.md                  Main documentation
+klone/
+├── api/v1alpha1/              # CRD definitions (KloneCluster spec/status)
+│   └── klonecluster_types.go  # Edit this to add fields, then run `make manifests generate`
+├── cmd/main.go                # Operator entry point
+├── internal/controller/       # Reconciliation logic (split across files)
+│   ├── klonecluster_controller.go  # Main reconcile loop, finalizers, CIDR allocation
+│   ├── workloads.go           # StatefulSet (control plane), Deployments (workers, terminal)
+│   ├── resources.go           # Namespace, PV, PVC, ConfigMap creation
+│   ├── ingress.go             # Tailscale and ALB ingress handling
+│   ├── cleanup.go             # Finalizer deletion logic
+│   ├── restart.go             # ConfigMap change detection
+│   └── utils.go               # CIDR allocation, helper functions
+├── dashboard/                 # Web UI for visualizing KloneClusters
+├── config/
+│   ├── crd/bases/             # Generated CRDs (DO NOT EDIT MANUALLY)
+│   ├── rbac/role.yaml         # Generated RBAC (DO NOT EDIT MANUALLY)
+│   ├── manager/               # Operator deployment
+│   ├── dashboard/             # Dashboard deployment
+│   └── samples/               # Example KloneCluster CRs
+├── helm/klone-operator/       # Helm chart for production deployment
+├── examples/                  # Sample manifests
+└── test/                      # Unit and E2E tests
 ```
 
-## Build and Development Commands
+## Controller Architecture
 
-All commands should be run from the repository root directory.
+**Reconciliation Flow:**
+1. Namespace creation (named after cluster)
+2. Storage setup (hostPath PV + PVC for k3s data)
+3. CIDR allocation (unique cluster-cidr and service-cidr)
+4. Control plane (StatefulSet running k3s server)
+5. Worker nodes (Deployment running k3s agents)
+6. Terminal (Deployment with ttyd + kubectl configured)
+7. Ingress (Tailscale or ALB based on spec.ingress.type)
+8. Metrics server installation (Job that runs in nested cluster)
+9. Status updates (track workload states, URLs, readiness)
 
-**Standard Build and Deploy Process**: When building and deploying new versions, always use:
-```bash
-IMG=raghavendiran2002/klone-operator:v1.0.49 make docker-build deploy
-```
-This command builds a multi-architecture Docker image (amd64 + arm64) and deploys it to the cluster.
-
-### Local Development
-```bash
-make manifests generate fmt vet   # Regenerate CRDs/RBAC and format code
-make build                        # Build manager binary to bin/manager
-make run                          # Run controller locally (uses ~/.kube/config)
-make test                         # Run unit tests with envtest
-make lint                         # Run golangci-lint
-make lint-fix                     # Auto-fix linting issues
-```
-
-### Docker Image Management
-```bash
-# Build and push operator image (set IMG to your registry)
-IMG=raghavendiran2002/klone-operator:v1.0.24 make docker-build
-IMG=raghavendiran2002/klone-operator:v1.0.24 make docker-push
-
-# Or combined:
-IMG=raghavendiran2002/klone-operator:v1.0.24 make docker-build docker-push
-```
-
-### Cluster Deployment
-```bash
-# Install CRDs only
-make install
-
-# Deploy operator to cluster
-IMG=raghavendiran2002/klone-operator:v1.0.24 make deploy
-
-# Create a sample cluster
-kubectl apply -f config/samples/klone_v1alpha1_klonecluster.yaml
-
-# Remove operator
-make undeploy
-
-# Remove CRDs
-make uninstall
-```
-
-### Testing
-```bash
-# Unit tests (uses envtest)
-make test
-
-# E2E tests (creates a Kind cluster automatically)
-make test-e2e
-
-# Cleanup test cluster
-make cleanup-test-e2e
-```
-
-## Architecture
-
-### Controller Design
-
-The `KloneClusterReconciler` is split across multiple files for maintainability:
-
-- **klonecluster_controller.go** (661 lines): Main reconciliation loop, finalizer handling, status management, CIDR allocation
-- **workloads.go**: Creates StatefulSets (control plane), Deployments (workers, terminal), Services
-- **resources.go**: Creates Namespaces, PersistentVolumes, PersistentVolumeClaims, ConfigMaps
-- **ingress.go**: Handles Tailscale/ALB ingress creation based on spec.ingress.type
-- **cleanup.go**: Finalizer logic for graceful deletion and orphan cleanup
-- **restart.go**: Handles ConfigMap changes and triggers workload restarts
-- **utils.go**: CIDR allocation, helper functions
-
-### Reconciliation Flow
-
-1. **Namespace Creation**: Creates a dedicated namespace named after the cluster
-2. **Storage Setup**: Creates PV (hostPath) and PVC for k3s data persistence
-3. **CIDR Allocation**: Assigns unique cluster-cidr and service-cidr to prevent conflicts
-4. **Control Plane**: StatefulSet running k3s server with allocated CIDRs
-5. **Worker Nodes**: Deployment running k3s agents connecting to control plane
-6. **Terminal**: Deployment with ttyd providing web-based kubectl access
-7. **Ingress**: Creates Ingress resource (Tailscale or ALB) based on configuration
-8. **Metrics Server**: Job that installs metrics-server into the nested cluster (if enabled)
-9. **Status Updates**: Continuously updates .status with workload states, URLs, and conditions
-
-### CIDR Management
-
-**Critical for multi-cluster scenarios**: Each KloneCluster gets unique CIDRs to avoid IP conflicts when nested clusters route through the parent cluster.
-
-- Allocation is deterministic based on cluster name hash
+**CIDR Management (Critical for Multi-Cluster):**
+- Each KloneCluster MUST have unique CIDRs to avoid routing conflicts
+- Allocation is deterministic based on hash of cluster name
 - `AllocateCIDRs()` in utils.go generates: `10.{hash1}.0.0/16` (pods) and `10.{hash2}.0.0/16` (services)
-- Stored in `status.clusterCIDR` and `status.serviceCIDR`
+- CIDRs stored in `status.clusterCIDR` and `status.serviceCIDR`
 - Passed to k3s via `--cluster-cidr` and `--service-cidr` flags
 
-### Terminal Access
+**Terminal Access:**
+- Init container extracts kubeconfig from control plane
+- **CRITICAL**: Server URL must be `https://klone-controlplane:6443` (Service DNS), NOT localhost
+- ttyd provides web shell at port 7681
+- kubectl is pre-installed and configured
 
-The terminal pod provides web-based access to the nested cluster:
+**Controller File Organization:**
+- Add new workload types → `workloads.go`
+- Add new resource types → `resources.go`
+- Modify ingress logic → `ingress.go`
+- Change deletion behavior → `cleanup.go`
+- Modify main reconcile flow → `klonecluster_controller.go`
 
-1. **Kubeconfig Setup**: An init container extracts the kubeconfig from the k3s control plane
-2. **Server Replacement**: The kubeconfig's server URL is rewritten to point to the control plane Service
-3. **ttyd Server**: Runs `ttyd sh` to provide a web shell with `kubectl` available
-4. **Authentication**: The terminal pod has the kubeconfig mounted and kubectl configured
+## Development Patterns
 
-### Dashboard
-
-A separate Go application (`dashboard/main.go`) that provides a web UI:
-
-- Lists all KloneCluster resources across the parent cluster
-- Shows status, workload health, and ingress URLs
-- Proxies terminal access through `/api/terminal/{namespace}/`
-- Deployed via `config/dashboard/deployment.yaml`
-
-## Making Changes
-
-### Modifying the CRD
-
+**Adding/Modifying CRD Fields:**
 1. Edit `api/v1alpha1/klonecluster_types.go`
-2. Add/modify kubebuilder markers (e.g., `+kubebuilder:validation:Enum=...`)
-3. Run `make manifests generate` to regenerate CRDs and DeepCopy methods
-4. Run `make install` to update CRDs in your cluster
-5. Run `make test` to ensure tests pass
+2. Add kubebuilder markers for validation (e.g., `+kubebuilder:validation:Enum=...`)
+3. Run `make manifests generate` to regenerate CRDs and DeepCopy
+4. Run `make install` to update CRDs in cluster
+5. Update controller logic in appropriate file
+6. Run `make test`
 
-### Adding Controller Logic
-
-The controller logic is split across multiple files. Choose the appropriate file:
-
-- **New workload types**: Add to `workloads.go`
-- **New resource types (ConfigMap, Secret)**: Add to `resources.go`
-- **Ingress changes**: Edit `ingress.go`
-- **Cleanup/deletion logic**: Edit `cleanup.go`
-- **Main reconciliation flow**: Edit `klonecluster_controller.go`
-
-Always maintain the existing pattern:
-1. Check if resource exists
-2. Create with owner reference if missing
-3. Update status to reflect actual state
-
-### Updating RBAC
-
-The operator needs permissions to create resources in the parent cluster:
-
-- Add RBAC markers in controller files: `// +kubebuilder:rbac:groups=...,resources=...,verbs=...`
+**Adding Controller Permissions:**
+- Add RBAC markers: `// +kubebuilder:rbac:groups=...,resources=...,verbs=...`
 - Run `make manifests` to regenerate `config/rbac/role.yaml`
-- Do NOT manually edit `config/rbac/role.yaml` - it's auto-generated
+- Never manually edit `config/rbac/role.yaml` (auto-generated)
 
-### Testing Changes Locally
-
+**Testing Changes Locally:**
 ```bash
-# 1. Regenerate manifests and code
-make manifests generate
-
-# 2. Run tests
-make test
-
-# 3. Run controller locally (no Docker needed)
+# Run controller locally (no Docker needed, uses current kubeconfig)
 make run
 
-# 4. In another terminal, create a test cluster
-kubectl apply -f test-klonecluster.yaml
-
-# 5. Watch logs and status
-kubectl logs -f -l control-plane=controller-manager -n operator-system
-kubectl get klonecluster test-cluster -o yaml
+# In another terminal
+kubectl apply -f test-cluster.yaml
+kubectl get klonecluster -w
 ```
 
-### Building and Deploying Updates
+## Git Workflow
 
+**Required Configuration:**
+- Git user email: `raghavendiran46461@gmail.com`
+- Never add `Co-Authored-By: Claude <noreply@anthropic.com>`
+- Use conventional commits format
+
+**Conventional Commit Format:**
+```
+<type>(<scope>): <subject>
+
+<optional body>
+```
+
+**Types:**
+- `feat`: New feature (e.g., ArgoCD integration, new CRD field)
+- `fix`: Bug fix (e.g., CIDR allocation conflict)
+- `perf`: Performance improvement (e.g., Docker build optimization)
+- `refactor`: Code restructuring without behavior change
+- `docs`: Documentation updates (README, comments)
+- `chore`: Build/config changes (Makefile, CI/CD, version bumps)
+
+**Examples:**
+- `feat(argocd): Add automatic cluster registration to host ArgoCD`
+- `fix(terminal): Correct kubeconfig server URL to use Service DNS`
+- `perf(build): Optimize Docker multi-stage builds for faster CI`
+
+## Important Reminders
+
+**DO NOT:**
+- Manually edit `config/crd/bases/` (regenerated by `make manifests`)
+- Manually edit `config/rbac/role.yaml` (regenerated by `make manifests`)
+- Remove `// +kubebuilder:scaffold:*` comments (Kubebuilder injection points)
+- Remove finalizers from controller (critical for resource cleanup)
+- Use `localhost` in terminal kubeconfig (use Service DNS: `klone-controlplane`)
+
+**ALWAYS:**
+- Run `make manifests generate` after modifying `*_types.go` files
+- Build multi-arch images (amd64 + arm64)
+- Keep version files synchronized (4 files listed above)
+- Test with `make test` before committing significant changes
+- Use owner references for child resources (automatic garbage collection)
+
+**Resource Naming Patterns:**
+- Namespace: `{cluster-name}` (e.g., `test-cluster`)
+- PV: `klone-{cluster-name}-pv`
+- PVC: `klone-data` (in cluster namespace)
+- Control plane Service: `klone-controlplane`
+- Terminal Deployment: `klone-terminal`
+
+## Error Handling Patterns
+
+**Retry Logic:**
+- Failed operations (build, deploy) should retry once
+- After second failure, stop and report detailed error
+- Never silently ignore errors
+
+**Common Failure Scenarios:**
+1. **kubectl not working in terminal**: Check Service exists and kubeconfig has correct server URL
+2. **CIDR conflicts**: Verify unique CIDRs in status, check k3s server logs for CIDR flags
+3. **Ingress not created**: Verify type is not 'none', check if Tailscale/ALB controller is installed
+4. **Orphaned resources after deletion**: Check finalizer execution logs
+
+## Helm Chart Management
+
+**Chart Location:** `helm/klone-operator/`
+
+**Key Files:**
+- `Chart.yaml` - Chart metadata (version, appVersion)
+- `values.yaml` - Default values (image tags, resources, replicas)
+- `templates/` - Kubernetes manifests with templating
+
+**Publishing Flow (automated by CI/CD):**
+1. Chart packaged: `helm package helm/klone-operator`
+2. Uploaded to `gh-pages` branch
+3. Repository index updated: `helm repo index`
+4. Available at: `https://raghavendiran-2002.github.io/klone/helm-charts`
+
+## Testing
+
+**Unit Tests:**
 ```bash
-# 1. Increment version tag
-export VERSION=v1.0.25
-
-# 2. Build and push
-IMG=raghavendiran2002/klone-operator:$VERSION make docker-build docker-push
-
-# 2.1. Build and push and deploy  ( use mostly this one)
-IMG=raghavendiran2002/klone-operator:$VERSION make docker-build docker-push deploy
-
-# 3. Deploy to cluster
-IMG=raghavendiran2002/klone-operator:$VERSION make deploy
-
-# 4. Verify deployment
-kubectl get pods -n operator-system
-kubectl logs -f -n operator-system -l control-plane=controller-manager
+make test  # Uses envtest (fake Kubernetes API)
 ```
 
-## Common Issues and Solutions
+**E2E Tests:**
+```bash
+make test-e2e         # Creates Kind cluster, deploys operator, tests KloneCluster creation
+make cleanup-test-e2e # Cleanup
+```
 
-### Nested kubectl Not Working
+**Manual Testing:**
+```bash
+# Create test cluster
+kubectl apply -f examples/test-cluster.yaml
 
-Check that:
-1. Control plane Service is running and has an endpoint
-2. Kubeconfig in terminal pod has correct server URL (`https://klone-controlplane:6443`)
-3. Terminal pod has network access to control plane Service
-4. k3s token matches between control plane and terminal ConfigMap
+# Monitor
+kubectl get klonecluster test-cluster -w
+kubectl get pods -n test-cluster
 
-### CIDR Conflicts
+# Access terminal
+kubectl port-forward -n test-cluster svc/klone-terminal 7681:7681
+# Open http://localhost:7681
 
-If nested clusters can't communicate or have routing issues:
-1. Check `status.clusterCIDR` and `status.serviceCIDR` are set
-2. Verify k3s server is running with correct `--cluster-cidr` and `--service-cidr`
-3. Ensure no overlap with parent cluster CIDRs (usually `10.42.0.0/16` for k3s)
+# Verify nested cluster
+kubectl exec -n test-cluster deployment/klone-terminal -- kubectl get nodes
 
-### Ingress Not Created
+# Cleanup
+kubectl delete klonecluster test-cluster
+```
 
-1. Check `spec.ingress.type` is set to `tailscale` or `loadbalancer` (not `none`)
-2. For Tailscale: Verify tailscale operator is installed in the parent cluster
-3. For ALB: Verify AWS Load Balancer Controller is installed and has proper IAM permissions
+## Additional Resources
 
-### Orphaned Resources
-
-If resources remain after deleting a KloneCluster:
-1. Check if finalizer is properly removing child resources
-2. Manually delete the namespace: `kubectl delete namespace <cluster-name>`
-3. Delete PV: `kubectl delete pv klone-<cluster-name>-pv`
-4. Check for stuck Ingress resources
-
-### Metrics Server Fails to Install
-
-1. Check the metrics-server Job logs: `kubectl logs -n <cluster-name> job/install-metrics-server`
-2. Verify the terminal pod can exec into kubectl
-3. Check if nested cluster has internet access (metrics-server image pull)
-
-## Important Notes
-
-- **DO NOT** manually edit files in `config/crd/bases/` or `config/rbac/role.yaml` - they are auto-generated
-- **DO NOT** remove `// +kubebuilder:scaffold:*` comments - Kubebuilder uses these as injection points
-- **ALWAYS** run `make manifests generate` after modifying `*_types.go` files
-- Each KloneCluster gets its own namespace, PV, and isolated network (via CIDRs)
-- The controller uses finalizers to ensure cleanup - do not remove the finalizer logic
-- Terminal pods need proper kubeconfig with the Service DNS name, not localhost
+- Full documentation: `README.md`
+- Example manifests: `examples/`
+- GitHub Actions workflows: `.github/workflows/`
+- Kubebuilder Book: https://book.kubebuilder.io/
