@@ -10,6 +10,7 @@ rules:
   - namespaces
   - persistentvolumeclaims
   - persistentvolumes
+  - secrets
   - serviceaccounts
   - services
   verbs:
@@ -57,16 +58,6 @@ rules:
   - pods/log
   verbs:
   - get
-- apiGroups:
-  - ""
-  resources:
-  - secrets
-  verbs:
-  - delete
-  - get
-  - list
-  - patch
-  - watch
 - apiGroups:
   - apiregistration.k8s.io
   resources:

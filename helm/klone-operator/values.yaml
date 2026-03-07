@@ -10,7 +10,7 @@ controllerManager:
   # Image configuration
   image:
     repository: raghavendiran2002/klone-operator
-    tag: v1.0.51
+    tag: v1.0.54
     pullPolicy: IfNotPresent
 
   # Replica count
@@ -70,6 +70,55 @@ controllerManager:
   #             operator: In
   #             values:
   #               - linux
+
+  # Node selector
+  nodeSelector: {}
+
+  # Tolerations
+  tolerations: []
+
+  # Additional labels for the deployment
+  labels: {}
+
+  # Additional annotations for the deployment
+  annotations: {}
+
+  # Additional pod labels
+  podLabels: {}
+
+  # Additional pod annotations
+  podAnnotations: {}
+
+# Dashboard configuration
+dashboard:
+  # Image configuration
+  image:
+    repository: raghavendiran2002/klone-dashboard
+    tag: v1.0.13
+    pullPolicy: IfNotPresent
+
+  # Replica count
+  replicaCount: 1
+
+  # Admin credentials for dashboard login
+  admin:
+    username: admin
+    password: changeme
+
+  # Resource limits and requests
+  resources:
+    limits:
+      cpu: 500m
+      memory: 256Mi
+    requests:
+      cpu: 100m
+      memory: 128Mi
+
+  # Service configuration
+  service:
+    type: ClusterIP
+    port: 80
+    targetPort: 8080
 
   # Node selector
   nodeSelector: {}

@@ -299,6 +299,11 @@ spec:
                         type: object
                     type: object
                 type: object
+              username:
+                description: |-
+                  username for cluster access authentication
+                  If not specified, defaults to the cluster name
+                type: string
             required:
             - k3s
             - storage
@@ -386,6 +391,10 @@ spec:
                 x-kubernetes-list-map-keys:
                 - type
                 x-kubernetes-list-type: map
+              credentialsSecretName:
+                description: credentialsSecretName is the name of the secret containing
+                  cluster credentials (username/password)
+                type: string
               ingressURL:
                 description: ingressURL is the URL to access the cluster terminal
                 type: string

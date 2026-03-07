@@ -4,6 +4,9 @@ metadata:
   name: raghav-cluster
   namespace: default
 spec:
+  # Username for dashboard authentication (optional, defaults to cluster name)
+  username: raghav
+
   k3s:
     image: rancher/k3s:v1.35.1-k3s1
     token: supersecrettoken123

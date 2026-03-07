@@ -2,8 +2,10 @@ package controller
 
 import (
 	"crypto/md5"
+	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"math/big"
 )
 
 const (
@@ -32,6 +34,27 @@ func AllocateCIDRs(clusterName string) (clusterCIDR, serviceCIDR string) {
 	serviceCIDR = fmt.Sprintf("10.%d.0.0/16", 150+offset)
 
 	return clusterCIDR, serviceCIDR
+}
+
+// GenerateRandomPassword generates a cryptographically secure random password
+func GenerateRandomPassword(length int) (string, error) {
+	const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*"
+	password := make([]byte, length)
+
+	for i := range password {
+		num, err := rand.Int(rand.Reader, big.NewInt(int64(len(charset))))
+		if err != nil {
+			return "", err
+		}
+		password[i] = charset[num.Int64()]
+	}
+
+	return string(password), nil
+}
+
+// GetCredentialsSecretName returns the credentials secret name for a cluster
+func GetCredentialsSecretName(clusterName string) string {
+	return fmt.Sprintf("%s-credentials", clusterName)
 }
 
 // GetNamespaceName returns the namespace name for a cluster

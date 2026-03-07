@@ -52,6 +52,11 @@ type KloneClusterSpec struct {
 	// argoCD configuration for cluster registration with host ArgoCD
 	// +optional
 	ArgoCD *ArgoCDSpec `json:"argoCD,omitempty"`
+
+	// username for cluster access authentication
+	// If not specified, defaults to the cluster name
+	// +optional
+	Username string `json:"username,omitempty"`
 }
 
 // K3sSpec defines k3s cluster configuration
@@ -369,6 +374,10 @@ type KloneClusterStatus struct {
 	// argoCDClusterName is the name used when registering the cluster in ArgoCD
 	// +optional
 	ArgoCDClusterName string `json:"argoCDClusterName,omitempty"`
+
+	// credentialsSecretName is the name of the secret containing cluster credentials (username/password)
+	// +optional
+	CredentialsSecretName string `json:"credentialsSecretName,omitempty"`
 }
 
 // WorkloadStatus represents the status of a workload

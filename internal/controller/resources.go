@@ -291,3 +291,25 @@ func BuildArgoCDRoleBinding(cluster *klonev1alpha1.KloneCluster) *rbacv1.RoleBin
 		},
 	}
 }
+
+// BuildCredentialsSecret creates a Secret containing cluster access credentials
+func BuildCredentialsSecret(cluster *klonev1alpha1.KloneCluster, username, password string) *corev1.Secret {
+	return &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      GetCredentialsSecretName(cluster.Name),
+			Namespace: "default",
+			Labels: map[string]string{
+				"klone-managed":                "true",
+				"klone-cluster-name":           cluster.Name,
+				"app.kubernetes.io/name":       "klone",
+				"app.kubernetes.io/component":  "credentials",
+				"app.kubernetes.io/managed-by": "klone-operator",
+			},
+		},
+		Type: corev1.SecretTypeOpaque,
+		StringData: map[string]string{
+			"username": username,
+			"password": password,
+		},
+	}
+}

@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/golang-jwt/jwt/v5"
 	klonev1alpha1 "github.com/klone/operator/api/v1alpha1"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -30,13 +31,27 @@ import (
 )
 
 var (
-	k8sClient client.Client
-	scheme    = k8sruntime.NewScheme()
+	k8sClient      client.Client
+	scheme         = k8sruntime.NewScheme()
+	adminUsername  string
+	adminPassword  string
+	jwtSecretKey   = []byte("klone-dashboard-secret-key-change-in-production")
 )
 
 func init() {
 	_ = clientgoscheme.AddToScheme(scheme)
 	_ = klonev1alpha1.AddToScheme(scheme)
+
+	// Load admin credentials from environment variables
+	adminUsername = os.Getenv("ADMIN_USERNAME")
+	if adminUsername == "" {
+		adminUsername = "admin"
+	}
+
+	adminPassword = os.Getenv("ADMIN_PASSWORD")
+	if adminPassword == "" {
+		adminPassword = "changeme"
+	}
 }
 
 func main() {
@@ -44,20 +59,25 @@ func main() {
 		log.Fatalf("Failed to initialize Kubernetes client: %v", err)
 	}
 
+	// Public endpoints
+	http.HandleFunc("/api/login", loginHandler)
 	http.HandleFunc("/", serveIndex)
-	http.HandleFunc("/api/clusters", clustersHandler)
-	http.HandleFunc("/api/clusters/", clusterHandler)
-	http.HandleFunc("/api/terminal/", proxyTerminal)
 
-	http.HandleFunc("/api/metrics/host", hostMetrics)
-	http.HandleFunc("/api/metrics/cluster/", clusterMetrics)
+	// Protected endpoints (require JWT authentication)
+	http.HandleFunc("/api/clusters", jwtMiddleware(clustersHandler))
+	http.HandleFunc("/api/clusters/", jwtMiddleware(clusterHandler))
+	http.HandleFunc("/api/terminal/", jwtMiddleware(proxyTerminal))
+	http.HandleFunc("/api/metrics/host", jwtMiddleware(hostMetrics))
+	http.HandleFunc("/api/metrics/cluster/", jwtMiddleware(clusterMetrics))
+	http.HandleFunc("/api/credentials", jwtMiddleware(credentialsHandler))
 
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "8080"
 	}
 
-	log.Printf("Dashboard running on %s", port)
+	log.Printf("Dashboard running on port %s", port)
+	log.Printf("Admin username: %s", adminUsername)
 	log.Fatal(http.ListenAndServe(":"+port, nil))
 }
 
@@ -80,6 +100,218 @@ func initClient() error {
 
 	k8sClient, err = client.New(config, client.Options{Scheme: scheme})
 	return err
+}
+
+// ////////////////////////////////////////////////////
+// AUTHENTICATION
+// ////////////////////////////////////////////////////
+
+// Claims represents the JWT claims
+type Claims struct {
+	Username    string `json:"username"`
+	Role        string `json:"role"` // "admin" or "user"
+	ClusterName string `json:"clusterName,omitempty"` // Only for user role
+	jwt.RegisteredClaims
+}
+
+// LoginRequest represents the login request payload
+type LoginRequest struct {
+	Username string `json:"username"`
+	Password string `json:"password"`
+}
+
+// LoginResponse represents the login response payload
+type LoginResponse struct {
+	Token string `json:"token"`
+	Role  string `json:"role"`
+	ClusterName string `json:"clusterName,omitempty"`
+}
+
+// loginHandler handles user login requests
+func loginHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req LoginRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	var role string
+	var clusterName string
+
+	// Check if admin credentials
+	if req.Username == adminUsername && req.Password == adminPassword {
+		role = "admin"
+	} else {
+		// Try to validate as cluster user credentials
+		cluster, err := validateClusterCredentials(req.Username, req.Password)
+		if err != nil {
+			http.Error(w, "Invalid credentials", http.StatusUnauthorized)
+			return
+		}
+		role = "user"
+		clusterName = cluster
+	}
+
+	// Generate JWT token
+	expirationTime := time.Now().Add(24 * time.Hour)
+	claims := &Claims{
+		Username:    req.Username,
+		Role:        role,
+		ClusterName: clusterName,
+		RegisteredClaims: jwt.RegisteredClaims{
+			ExpiresAt: jwt.NewNumericDate(expirationTime),
+			IssuedAt:  jwt.NewNumericDate(time.Now()),
+		},
+	}
+
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	tokenString, err := token.SignedString(jwtSecretKey)
+	if err != nil {
+		http.Error(w, "Failed to generate token", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(LoginResponse{
+		Token:       tokenString,
+		Role:        role,
+		ClusterName: clusterName,
+	})
+}
+
+// validateClusterCredentials checks if username/password match any cluster credentials
+func validateClusterCredentials(username, password string) (string, error) {
+	// List all KloneClusters
+	clusterList := &klonev1alpha1.KloneClusterList{}
+	if err := k8sClient.List(context.Background(), clusterList); err != nil {
+		return "", fmt.Errorf("failed to list clusters: %w", err)
+	}
+
+	for _, cluster := range clusterList.Items {
+		// Get credentials secret if exists
+		if cluster.Status.CredentialsSecretName == "" {
+			continue
+		}
+
+		secret := &corev1.Secret{}
+		err := k8sClient.Get(context.Background(), client.ObjectKey{
+			Name:      cluster.Status.CredentialsSecretName,
+			Namespace: "default",
+		}, secret)
+		if err != nil {
+			continue
+		}
+
+		secretUsername := string(secret.Data["username"])
+		secretPassword := string(secret.Data["password"])
+
+		if secretUsername == username && secretPassword == password {
+			return cluster.Name, nil
+		}
+	}
+
+	return "", fmt.Errorf("invalid credentials")
+}
+
+// jwtMiddleware is a middleware that validates JWT tokens
+func jwtMiddleware(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var tokenString string
+
+		// Extract token from Authorization header
+		authHeader := r.Header.Get("Authorization")
+		if authHeader != "" {
+			// Check if it's a Bearer token
+			parts := strings.Split(authHeader, " ")
+			if len(parts) == 2 && parts[0] == "Bearer" {
+				tokenString = parts[1]
+			}
+		}
+
+		// If no token in header, check URL query parameter (for terminal connections)
+		if tokenString == "" {
+			tokenString = r.URL.Query().Get("token")
+		}
+
+		if tokenString == "" {
+			http.Error(w, "Missing authorization header", http.StatusUnauthorized)
+			return
+		}
+
+		// Parse and validate token
+		claims := &Claims{}
+		token, err := jwt.ParseWithClaims(tokenString, claims, func(token *jwt.Token) (interface{}, error) {
+			return jwtSecretKey, nil
+		})
+
+		if err != nil || !token.Valid {
+			http.Error(w, "Invalid token", http.StatusUnauthorized)
+			return
+		}
+
+		// Store claims in request context
+		ctx := context.WithValue(r.Context(), "claims", claims)
+		next.ServeHTTP(w, r.WithContext(ctx))
+	}
+}
+
+// credentialsHandler returns all cluster credentials (admin only)
+func credentialsHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Get claims from context
+	claims, ok := r.Context().Value("claims").(*Claims)
+	if !ok || claims.Role != "admin" {
+		http.Error(w, "Forbidden: Admin access required", http.StatusForbidden)
+		return
+	}
+
+	// List all KloneClusters
+	clusterList := &klonev1alpha1.KloneClusterList{}
+	if err := k8sClient.List(context.Background(), clusterList); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	type ClusterCredentials struct {
+		ClusterName string `json:"clusterName"`
+		Username    string `json:"username"`
+		Password    string `json:"password"`
+	}
+
+	credentials := []ClusterCredentials{}
+	for _, cluster := range clusterList.Items {
+		if cluster.Status.CredentialsSecretName == "" {
+			continue
+		}
+
+		secret := &corev1.Secret{}
+		err := k8sClient.Get(context.Background(), client.ObjectKey{
+			Name:      cluster.Status.CredentialsSecretName,
+			Namespace: "default",
+		}, secret)
+		if err != nil {
+			log.Printf("Failed to get credentials for cluster %s: %v", cluster.Name, err)
+			continue
+		}
+
+		credentials = append(credentials, ClusterCredentials{
+			ClusterName: cluster.Name,
+			Username:    string(secret.Data["username"]),
+			Password:    string(secret.Data["password"]),
+		})
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(credentials)
 }
 
 // ////////////////////////////////////////////////////
@@ -112,12 +344,33 @@ func clustersHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func listClusters(w http.ResponseWriter, _ *http.Request) {
+func listClusters(w http.ResponseWriter, r *http.Request) {
 	clusterList := &klonev1alpha1.KloneClusterList{}
 	if err := k8sClient.List(context.Background(), clusterList); err != nil {
 		http.Error(w, err.Error(), 500)
 		return
 	}
+
+	// Get claims from context
+	claims, ok := r.Context().Value("claims").(*Claims)
+	if !ok {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	// Filter clusters based on user role
+	if claims.Role == "user" {
+		// Users can only see their own cluster
+		filteredClusters := []klonev1alpha1.KloneCluster{}
+		for _, cluster := range clusterList.Items {
+			if cluster.Name == claims.ClusterName {
+				filteredClusters = append(filteredClusters, cluster)
+				break
+			}
+		}
+		clusterList.Items = filteredClusters
+	}
+
 	if err := json.NewEncoder(w).Encode(clusterList); err != nil {
 		http.Error(w, "Failed to encode response", http.StatusInternalServerError)
 	}
@@ -1057,7 +1310,35 @@ func getIndexHTML() string {
     </style>
 </head>
 <body class="bg-gray-50">
-    <div class="flex h-screen">
+    <!-- Login Screen -->
+    <div id="login-screen" class="fixed inset-0 bg-gray-900 flex items-center justify-center z-50">
+        <div class="bg-white p-8 rounded-lg shadow-2xl w-96">
+            <div class="text-center mb-6">
+                <h1 class="text-3xl font-bold text-blue-600">Klone Dashboard</h1>
+                <p class="text-gray-600 mt-2">Sign in to continue</p>
+            </div>
+            <div id="login-error" class="hidden bg-red-100 text-red-700 p-3 rounded mb-4 text-sm"></div>
+            <form id="login-form" onsubmit="handleLogin(event)">
+                <div class="mb-4">
+                    <label class="block text-gray-700 text-sm font-bold mb-2">Username</label>
+                    <input type="text" id="login-username" required
+                           class="w-full px-3 py-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500">
+                </div>
+                <div class="mb-6">
+                    <label class="block text-gray-700 text-sm font-bold mb-2">Password</label>
+                    <input type="password" id="login-password" required
+                           class="w-full px-3 py-2 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500">
+                </div>
+                <button type="submit"
+                        class="w-full bg-blue-600 text-white py-2 rounded hover:bg-blue-700 transition font-semibold">
+                    Sign In
+                </button>
+            </form>
+        </div>
+    </div>
+
+    <!-- Main Dashboard (hidden until logged in) -->
+    <div id="main-dashboard" class="flex h-screen" style="display: none;">
         <!-- Sidebar -->
         <aside class="w-64 bg-gradient-to-b from-blue-600 to-blue-800 text-white flex flex-col">
             <div class="p-6">
@@ -1089,20 +1370,32 @@ func getIndexHTML() string {
                     </svg>
                     <span>Create Cluster</span>
                 </button>
+                <button id="credentials-nav-btn" onclick="showView('credentials')" class="nav-btn w-full text-left px-4 py-3 rounded-lg hover:bg-blue-700 transition flex items-center space-x-3" style="display: none;">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z"/>
+                    </svg>
+                    <span>Credentials</span>
+                </button>
             </nav>
 
             <div class="p-4 border-t border-blue-700">
-                <div class="flex items-center space-x-3">
+                <div class="flex items-center space-x-3 mb-3">
                     <div class="w-10 h-10 rounded-full bg-blue-500 flex items-center justify-center">
                         <svg class="w-6 h-6" fill="currentColor" viewBox="0 0 20 20">
                             <path fill-rule="evenodd" d="M10 9a3 3 0 100-6 3 3 0 000 6zm-7 9a7 7 0 1114 0H3z" clip-rule="evenodd"/>
                         </svg>
                     </div>
                     <div class="flex-1">
-                        <p class="text-sm font-medium">Admin</p>
-                        <p class="text-xs text-blue-200">System User</p>
+                        <p id="current-username" class="text-sm font-medium">User</p>
+                        <p id="current-role" class="text-xs text-blue-200">Loading...</p>
                     </div>
                 </div>
+                <button onclick="handleLogout()" class="w-full px-3 py-2 bg-blue-700 hover:bg-blue-600 rounded text-sm flex items-center justify-center space-x-2 transition">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"/>
+                    </svg>
+                    <span>Logout</span>
+                </button>
             </div>
         </aside>
 
@@ -1549,6 +1842,43 @@ func getIndexHTML() string {
                         </form>
                     </div>
                 </div>
+
+                <!-- Credentials View (Admin Only) -->
+                <div id="credentials-view" class="view-container hidden">
+                    <div class="mb-8">
+                        <h2 class="text-3xl font-bold text-gray-800">Cluster Credentials</h2>
+                        <p class="text-gray-600 mt-2">View and copy credentials for all clusters</p>
+                    </div>
+
+                    <div class="bg-white rounded-xl shadow-lg overflow-hidden">
+                        <div class="p-6 border-b border-gray-200 bg-gray-50 flex justify-between items-center">
+                            <h3 class="text-lg font-semibold text-gray-800">All Cluster Credentials</h3>
+                            <button onclick="copyAllCredentials()" class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg flex items-center space-x-2 transition">
+                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/>
+                                </svg>
+                                <span>Copy All</span>
+                            </button>
+                        </div>
+                        <div class="overflow-x-auto">
+                            <table class="w-full">
+                                <thead class="bg-gray-100 border-b border-gray-200">
+                                    <tr>
+                                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-700 uppercase tracking-wider">Cluster Name</th>
+                                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-700 uppercase tracking-wider">Username</th>
+                                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-700 uppercase tracking-wider">Password</th>
+                                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-700 uppercase tracking-wider">Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="credentials-table-body" class="bg-white divide-y divide-gray-200">
+                                    <tr>
+                                        <td colspan="4" class="px-6 py-4 text-center text-gray-500">Loading credentials...</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
             </div>
         </main>
     </div>
@@ -1599,8 +1929,13 @@ func getIndexHTML() string {
         </div>
     </div>
 
+    </div> <!-- End of main-dashboard -->
+
     <script>
         // Global state
+        let authToken = null;
+        let currentUser = null;
+        let userRole = null;
         let clusters = [];
         let metricsHistory = { cpu: [], memory: [], timestamps: [] };
         let cpuDonutChart = null;
@@ -1611,19 +1946,117 @@ func getIndexHTML() string {
         let currentClusterPods = [];
         let refreshInterval = null;
 
+        // Authentication Functions
+        async function handleLogin(event) {
+            event.preventDefault();
+            const username = document.getElementById('login-username').value;
+            const password = document.getElementById('login-password').value;
+            const errorDiv = document.getElementById('login-error');
+
+            try {
+                const response = await fetch('/api/login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username, password })
+                });
+
+                if (!response.ok) {
+                    throw new Error('Invalid credentials');
+                }
+
+                const data = await response.json();
+                authToken = data.token;
+                currentUser = username;
+                userRole = data.role;
+
+                localStorage.setItem('authToken', authToken);
+                localStorage.setItem('currentUser', currentUser);
+                localStorage.setItem('userRole', userRole);
+
+                document.getElementById('login-screen').style.display = 'none';
+                document.getElementById('main-dashboard').style.display = 'flex';
+                document.getElementById('current-username').textContent = currentUser;
+                document.getElementById('current-role').textContent = userRole === 'admin' ? 'Administrator' : 'User';
+
+                initDashboard();
+            } catch (error) {
+                errorDiv.textContent = 'Invalid username or password';
+                errorDiv.classList.remove('hidden');
+            }
+        }
+
+        function handleLogout() {
+            authToken = null;
+            currentUser = null;
+            userRole = null;
+            localStorage.removeItem('authToken');
+            localStorage.removeItem('currentUser');
+            localStorage.removeItem('userRole');
+
+            document.getElementById('login-screen').style.display = 'flex';
+            document.getElementById('main-dashboard').style.display = 'none';
+            document.getElementById('login-username').value = '';
+            document.getElementById('login-password').value = '';
+        }
+
+        async function authFetch(url, options = {}) {
+            if (!authToken) {
+                handleLogout();
+                throw new Error('No auth token');
+            }
+
+            options.headers = options.headers || {};
+            options.headers['Authorization'] = 'Bearer ' + authToken;
+
+            const response = await fetch(url, options);
+
+            if (response.status === 401) {
+                handleLogout();
+                throw new Error('Unauthorized');
+            }
+
+            return response;
+        }
+
         // Initialize
         document.addEventListener('DOMContentLoaded', function() {
-            showView('dashboard');
-            loadClusters();
-            startAutoRefresh();
-            initializeMetricsCharts();
-            startMetricsRefresh();
+            // Check for existing auth token
+            const savedToken = localStorage.getItem('authToken');
+            const savedUser = localStorage.getItem('currentUser');
+            const savedRole = localStorage.getItem('userRole');
+
+            if (savedToken && savedUser && savedRole) {
+                authToken = savedToken;
+                currentUser = savedUser;
+                userRole = savedRole;
+                document.getElementById('login-screen').style.display = 'none';
+                document.getElementById('main-dashboard').style.display = 'flex';
+                document.getElementById('current-username').textContent = currentUser;
+                document.getElementById('current-role').textContent = userRole === 'admin' ? 'Administrator' : 'User';
+                initDashboard();
+            } else {
+                document.getElementById('login-screen').style.display = 'flex';
+                document.getElementById('main-dashboard').style.display = 'none';
+            }
 
             // Toggle ArgoCD config visibility
             document.getElementById('argoCDEnabled').addEventListener('change', function() {
                 document.getElementById('argocd-config').classList.toggle('hidden', !this.checked);
             });
         });
+
+        function initDashboard() {
+            // Show credentials button for admin users
+            if (userRole === 'admin') {
+                document.getElementById('credentials-nav-btn').style.display = 'block';
+            }
+
+            showView('dashboard');
+            loadClusters();
+            startAutoRefresh();
+            initializeMetricsCharts();
+            startMetricsRefresh();
+        }
 
         // View Management
         function showView(viewName) {
@@ -1634,7 +2067,8 @@ func getIndexHTML() string {
                 'dashboard': 'dashboard-view',
                 'clusters': 'clusters-view',
                 'create': 'create-view',
-                'detail': 'detail-view'
+                'detail': 'detail-view',
+                'credentials': 'credentials-view'
             };
 
             const viewId = viewMap[viewName];
@@ -1647,9 +2081,11 @@ func getIndexHTML() string {
             if (viewName === 'dashboard') buttons[0]?.classList.add('bg-blue-700');
             if (viewName === 'clusters') buttons[1]?.classList.add('bg-blue-700');
             if (viewName === 'create') buttons[2]?.classList.add('bg-blue-700');
+            if (viewName === 'credentials') document.getElementById('credentials-nav-btn')?.classList.add('bg-blue-700');
 
             if (viewName === 'clusters') loadClusters();
             if (viewName === 'dashboard') loadDashboardData();
+            if (viewName === 'credentials') loadCredentials();
         }
 
         // Auto-refresh
@@ -1728,7 +2164,7 @@ func getIndexHTML() string {
 
         async function loadMetrics() {
             try {
-                const response = await fetch('/api/metrics/host');
+                const response = await authFetch('/api/metrics/host');
                 const data = await response.json();
 
                 if (data.metricsAvailable && data.metrics) {
@@ -1742,7 +2178,7 @@ func getIndexHTML() string {
 
         async function fetchClusterMetrics(clusterName) {
             try {
-                const response = await fetch('/api/metrics/cluster/' + clusterName);
+                const response = await authFetch('/api/metrics/cluster/' + clusterName);
                 const data = await response.json();
                 return data;
             } catch (error) {
@@ -1897,7 +2333,7 @@ func getIndexHTML() string {
         // API Calls
         async function loadClusters() {
             try {
-                const response = await fetch('/api/clusters');
+                const response = await authFetch('/api/clusters');
                 const data = await response.json();
                 clusters = data.items || [];
                 renderClusters();
@@ -1908,7 +2344,7 @@ func getIndexHTML() string {
 
         async function loadDashboardData() {
             try {
-                const response = await fetch('/api/clusters');
+                const response = await authFetch('/api/clusters');
                 const data = await response.json();
                 clusters = data.items || [];
 
@@ -1920,7 +2356,7 @@ func getIndexHTML() string {
 
                 for (const cluster of clusters) {
                     try {
-                        const metricsRes = await fetch('/api/metrics/cluster/' + cluster.metadata.name);
+                        const metricsRes = await authFetch('/api/metrics/cluster/' + cluster.metadata.name);
                         const metrics = await metricsRes.json();
                         totalRunning += metrics.pods?.running || 0;
                         totalFailed += metrics.pods?.failed || 0;
@@ -1941,9 +2377,9 @@ func getIndexHTML() string {
         async function loadClusterDetail(name, namespace = 'default') {
             try {
                 const [clusterRes, metricsRes, logsRes] = await Promise.all([
-                    fetch('/api/clusters/' + namespace + '/' + name),
-                    fetch('/api/metrics/cluster/' + name),
-                    fetch('/api/clusters/' + namespace + '/' + name + '/logs')
+                    authFetch('/api/clusters/' + namespace + '/' + name),
+                    authFetch('/api/metrics/cluster/' + name),
+                    authFetch('/api/clusters/' + namespace + '/' + name + '/logs')
                 ]);
 
                 currentCluster = await clusterRes.json();
@@ -1984,7 +2420,7 @@ func getIndexHTML() string {
             }
 
             try {
-                const response = await fetch('/api/clusters', {
+                const response = await authFetch('/api/clusters', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(data)
@@ -2009,7 +2445,7 @@ func getIndexHTML() string {
             if (!confirm('Are you sure you want to delete cluster "' + currentCluster.metadata.name + '"?')) return;
 
             try {
-                const response = await fetch('/api/clusters/' + currentCluster.metadata.namespace + '/' + currentCluster.metadata.name, {
+                const response = await authFetch('/api/clusters/' + currentCluster.metadata.namespace + '/' + currentCluster.metadata.name, {
                     method: 'DELETE'
                 });
 
@@ -2043,7 +2479,7 @@ func getIndexHTML() string {
             const replicas = parseInt(document.getElementById('scale-replicas').value);
 
             try {
-                const response = await fetch('/api/clusters/' + currentCluster.metadata.namespace + '/' + currentCluster.metadata.name + '/scale', {
+                const response = await authFetch('/api/clusters/' + currentCluster.metadata.namespace + '/' + currentCluster.metadata.name + '/scale', {
                     method: 'PATCH',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ workerReplicas: replicas })
@@ -2070,14 +2506,14 @@ func getIndexHTML() string {
 
             const namespace = currentCluster.metadata.namespace;
             const name = currentCluster.metadata.name;
-            const terminalURL = '/api/terminal/' + name + '/';
+            const terminalURL = '/api/terminal/' + name + '/?token=' + encodeURIComponent(authToken);
 
             // Open terminal in new window
             window.open(terminalURL, 'terminal-' + name, 'width=1200,height=800,menubar=no,toolbar=no,location=no,status=no');
         }
 
         function openTerminalForCluster(clusterName) {
-            const terminalURL = '/api/terminal/' + clusterName + '/';
+            const terminalURL = '/api/terminal/' + clusterName + '/?token=' + encodeURIComponent(authToken);
             window.open(terminalURL, 'terminal-' + clusterName, 'width=1200,height=800,menubar=no,toolbar=no,location=no,status=no');
         }
 
@@ -2184,6 +2620,71 @@ func getIndexHTML() string {
                 const cpuPercent = 0; // Placeholder
                 const memPercent = 0; // Placeholder
                 metricsEl.innerHTML = formatMetricBadge('CPU', cpuPercent, 'cpu') + formatMetricBadge('MEM', memPercent, 'memory');
+            }
+        }
+
+        // Credentials Functions
+        async function loadCredentials() {
+            try {
+                const response = await authFetch('/api/credentials');
+                if (!response.ok) throw new Error('Failed to load credentials');
+                const credentials = await response.json();
+                renderCredentials(credentials);
+            } catch (error) {
+                console.error('Error loading credentials:', error);
+                document.getElementById('credentials-table-body').innerHTML =
+                    '<tr><td colspan="4" class="px-6 py-4 text-center text-red-500">Failed to load credentials</td></tr>';
+            }
+        }
+
+        function renderCredentials(credentials) {
+            const tbody = document.getElementById('credentials-table-body');
+            if (credentials.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="4" class="px-6 py-4 text-center text-gray-500">No credentials found</td></tr>';
+                return;
+            }
+
+            tbody.innerHTML = credentials.map(cred =>
+                '<tr>' +
+                '<td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">' + cred.clusterName + '</td>' +
+                '<td class="px-6 py-4 whitespace-nowrap text-sm text-gray-700 font-mono">' + cred.username + '</td>' +
+                '<td class="px-6 py-4 whitespace-nowrap text-sm text-gray-700 font-mono">' + cred.password + '</td>' +
+                '<td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">' +
+                '<button onclick="copyCredential(\'' + cred.username + '\', \'' + cred.password + '\')" class="text-blue-600 hover:text-blue-800 mr-2">' +
+                '<svg class="w-5 h-5 inline" fill="none" stroke="currentColor" viewBox="0 0 24 24">' +
+                '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/>' +
+                '</svg> Copy' +
+                '</button>' +
+                '</td>' +
+                '</tr>'
+            ).join('');
+        }
+
+        function copyCredential(username, password) {
+            const text = 'Username: ' + username + '\\nPassword: ' + password;
+            navigator.clipboard.writeText(text).then(() => {
+                alert('Credentials copied to clipboard!');
+            });
+        }
+
+        async function copyAllCredentials() {
+            try {
+                const response = await authFetch('/api/credentials');
+                if (!response.ok) throw new Error('Failed to load credentials');
+                const credentials = await response.json();
+
+                const text = credentials.map(cred =>
+                    'Cluster: ' + cred.clusterName + '\\n' +
+                    'Username: ' + cred.username + '\\n' +
+                    'Password: ' + cred.password
+                ).join('\\n\\n');
+
+                navigator.clipboard.writeText(text).then(() => {
+                    alert('All credentials copied to clipboard!');
+                });
+            } catch (error) {
+                console.error('Error copying credentials:', error);
+                alert('Failed to copy credentials');
             }
         }
 

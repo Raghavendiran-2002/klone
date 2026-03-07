@@ -61,8 +61,8 @@ type KloneClusterReconciler struct {
 // +kubebuilder:rbac:groups="",resources=persistentvolumes,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=persistentvolumeclaims,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch;delete;patch
-// ^^ includes ArgoCD secrets for cluster registration
+// +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch;create;update;patch;delete
+// ^^ includes ArgoCD secrets for cluster registration and credentials secrets
 // +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch;create
 // +kubebuilder:rbac:groups="",resources=pods/exec,verbs=create;get;list
 // +kubebuilder:rbac:groups="",resources=pods/log,verbs=get
@@ -167,7 +167,35 @@ func (r *KloneClusterReconciler) reconcileResources(ctx context.Context, cluster
 	}
 	log.Info("Reconciled Namespace", "name", ns.Name)
 
-	// 2. Reconcile PersistentVolume (cluster-scoped, no owner reference)
+	// 2. Reconcile Credentials Secret
+	if cluster.Status.CredentialsSecretName == "" {
+		// Determine username: use spec.username if provided, otherwise use cluster name
+		username := cluster.Spec.Username
+		if username == "" {
+			username = cluster.Name
+		}
+
+		// Generate random password
+		password, err := GenerateRandomPassword(16)
+		if err != nil {
+			return fmt.Errorf("failed to generate password: %w", err)
+		}
+
+		// Create credentials secret
+		credSecret := BuildCredentialsSecret(cluster, username, password)
+		if err := r.createOrUpdate(ctx, credSecret); err != nil {
+			return fmt.Errorf("failed to create credentials secret: %w", err)
+		}
+		log.Info("Created credentials secret", "name", credSecret.Name, "username", username)
+
+		// Update status with secret name
+		cluster.Status.CredentialsSecretName = credSecret.Name
+		if err := r.Status().Update(ctx, cluster); err != nil {
+			return fmt.Errorf("failed to update status with credentials secret name: %w", err)
+		}
+	}
+
+	// 3. Reconcile PersistentVolume (cluster-scoped, no owner reference)
 	pv := BuildPersistentVolume(cluster)
 	if err := r.createOrUpdatePV(ctx, pv); err != nil {
 		return fmt.Errorf("failed to reconcile PV: %w", err)
@@ -666,6 +694,21 @@ func (r *KloneClusterReconciler) handleDeletion(ctx context.Context, cluster *kl
 				}
 			}
 		*/
+
+		// Delete Credentials Secret
+		if cluster.Status.CredentialsSecretName != "" {
+			credSecret := &corev1.Secret{}
+			if err := r.Get(ctx, types.NamespacedName{
+				Name:      cluster.Status.CredentialsSecretName,
+				Namespace: "default",
+			}, credSecret); err == nil {
+				if err := r.Delete(ctx, credSecret); err != nil {
+					log.Error(err, "Failed to delete credentials secret")
+				} else {
+					log.Info("Deleted credentials secret", "name", cluster.Status.CredentialsSecretName)
+				}
+			}
+		}
 
 		// Delete PersistentVolume
 		pv := &corev1.PersistentVolume{}
