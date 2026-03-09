@@ -1,0 +1,42 @@
+Thank you for installing {{ .Chart.Name }}!
+
+Your release is named {{ .Release.Name }}.
+
+The Klone Operator has been successfully installed in namespace: {{ include "klone-operator.namespace" . }}
+
+To get started with Klone:
+
+1. Verify the operator is running:
+   kubectl get pods -n {{ include "klone-operator.namespace" . }} -l control-plane=controller-manager
+
+2. Check the operator logs:
+   kubectl logs -n {{ include "klone-operator.namespace" . }} -l control-plane=controller-manager -f
+
+3. Create your first nested K3s cluster:
+   kubectl apply -f - <<EOF
+   apiVersion: klone.klone.io/v1alpha1
+   kind: KloneCluster
+   metadata:
+     name: my-cluster
+   spec:
+     controlPlane:
+       replicas: 1
+     workers:
+       replicas: 2
+     terminal:
+       enabled: true
+     ingress:
+       type: none
+   EOF
+
+4. Watch your cluster come up:
+   kubectl get klonecluster my-cluster -w
+
+5. View cluster status:
+   kubectl get klonecluster my-cluster -o yaml
+
+For more information and examples:
+- GitHub: {{ .Chart.Home }}
+- Documentation: https://github.com/Raghavendiran-2002/klone/blob/main/README.md
+
+Happy clustering with Klone!

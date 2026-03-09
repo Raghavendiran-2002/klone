@@ -1,0 +1,56 @@
+{{- if .Values.dashboard.ingress.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "klone-operator.fullname" . }}-dashboard
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    # Use shared ALB group - all Klone ingresses will share the same ALB
+    alb.ingress.kubernetes.io/group.name: {{ .Values.dashboard.ingress.groupName | default "klone" }}
+    # Dashboard has highest priority (lowest order number)
+    alb.ingress.kubernetes.io/group.order: "1"
+    alb.ingress.kubernetes.io/scheme: {{ .Values.dashboard.ingress.scheme | default "internet-facing" }}
+    alb.ingress.kubernetes.io/target-type: {{ .Values.dashboard.ingress.targetType | default "ip" }}
+    {{- if .Values.dashboard.ingress.certificateArn }}
+    alb.ingress.kubernetes.io/certificate-arn: {{ .Values.dashboard.ingress.certificateArn }}
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTP": 80}, {"HTTPS": 443}]'
+    alb.ingress.kubernetes.io/ssl-redirect: '443'
+    {{- else }}
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTP": 80}]'
+    {{- end }}
+    {{- if .Values.dashboard.ingress.hostname }}
+    external-dns.alpha.kubernetes.io/hostname: {{ .Values.dashboard.ingress.hostname }}
+    {{- end }}
+    {{- with .Values.dashboard.ingress.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  labels:
+    app: {{ include "klone-operator.name" . }}-dashboard
+    {{- include "klone-operator.labels" . | nindent 4 }}
+spec:
+  ingressClassName: {{ .Values.dashboard.ingress.className | default "alb" }}
+  {{- if .Values.dashboard.ingress.hostname }}
+  rules:
+  - host: {{ .Values.dashboard.ingress.hostname }}
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: {{ include "klone-operator.fullname" . }}-dashboard
+            port:
+              number: 80
+  {{- else }}
+  rules:
+  - http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: {{ include "klone-operator.fullname" . }}-dashboard
+            port:
+              number: 80
+  {{- end }}
+{{- end }}

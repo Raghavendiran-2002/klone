@@ -1,0 +1,84 @@
+{{- if .Values.rbac.create }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "klone-operator.fullname" . }}-controller-manager
+  namespace: {{ include "klone-operator.namespace" . }}
+  labels:
+    {{- include "klone-operator.labels" . | nindent 4 }}
+    {{- with .Values.controllerManager.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  {{- with .Values.controllerManager.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  replicas: {{ .Values.controllerManager.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "klone-operator.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        kubectl.kubernetes.io/default-container: manager
+        {{- with .Values.controllerManager.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels:
+        {{- include "klone-operator.selectorLabels" . | nindent 8 }}
+        {{- with .Values.controllerManager.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "klone-operator.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.controllerManager.podSecurityContext | nindent 8 }}
+      containers:
+      - name: manager
+        image: {{ include "klone-operator.image" . }}
+        imagePullPolicy: {{ .Values.controllerManager.image.pullPolicy }}
+        command:
+        - /manager
+        args:
+        {{- if .Values.controllerManager.leaderElection.enabled }}
+        - --leader-elect
+        {{- end }}
+        - --health-probe-bind-address={{ .Values.controllerManager.healthProbe.bindAddress }}
+        ports: []
+        securityContext:
+          {{- toYaml .Values.controllerManager.securityContext | nindent 10 }}
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 8081
+          initialDelaySeconds: {{ .Values.controllerManager.healthProbe.livenessProbe.initialDelaySeconds }}
+          periodSeconds: {{ .Values.controllerManager.healthProbe.livenessProbe.periodSeconds }}
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: 8081
+          initialDelaySeconds: {{ .Values.controllerManager.healthProbe.readinessProbe.initialDelaySeconds }}
+          periodSeconds: {{ .Values.controllerManager.healthProbe.readinessProbe.periodSeconds }}
+        resources:
+          {{- toYaml .Values.controllerManager.resources | nindent 10 }}
+        volumeMounts: []
+      volumes: []
+      terminationGracePeriodSeconds: 10
+      {{- with .Values.controllerManager.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.controllerManager.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.controllerManager.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}
