@@ -6,7 +6,6 @@ metadata:
 spec:
   # Username for dashboard authentication (optional, defaults to cluster name)
   username: raghav
-
   k3s:
     image: rancher/k3s:v1.35.1-k3s1
     token: supersecrettoken123
@@ -22,7 +21,19 @@ spec:
     image: alpine:3.19
     replicas: 1
   ingress:
-    type: none
+    type: loadbalancer
+    loadBalancer:
+      scheme: internet-facing
+      annotations:
+        alb.ingress.kubernetes.io/scheme: internet-facing
+        alb.ingress.kubernetes.io/target-type: ip
+        alb.ingress.kubernetes.io/listen-ports: '[{"HTTP": 80}]'
+      # Optional: Configure HTTPS with ACM certificate
+      # certificateArn: arn:aws:acm:us-east-1:123456789012:certificate/xxxxx
+      # Optional: Configure external-dns for automatic DNS record creation
+      # externalDNS:
+      #   hostname: raghav.example.com
+      #   ttl: 300
   metricsServer:
     enabled: true
     image: registry.k8s.io/metrics-server/metrics-server:v0.7.0
