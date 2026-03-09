@@ -2,15 +2,19 @@
 # This is a YAML-formatted file.
 # Declare variables to be passed into your templates.
 
-# Namespace where the operator will be installed
-namespace: klone
+# Namespace configuration
+namespace:
+  # Name of the namespace where the operator will be installed
+  name: klone
+  # Create namespace (set to false when using external tools like Terraform)
+  create: false
 
 # Controller manager configuration
 controllerManager:
   # Image configuration
   image:
     repository: raghavendiran2002/klone-operator
-    tag: v1.0.56
+    tag: v1.0.57
     pullPolicy: IfNotPresent
 
   # Replica count

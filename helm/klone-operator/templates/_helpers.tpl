@@ -74,5 +74,9 @@ Return the proper image name
 Return the namespace
 */}}
 {{- define "klone-operator.namespace" -}}
+{{- if kindIs "map" .Values.namespace }}
+{{- .Values.namespace.name | default "klone" }}
+{{- else }}
 {{- .Values.namespace | default "klone" }}
+{{- end }}
 {{- end }}
