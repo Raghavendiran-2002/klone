@@ -2,8 +2,32 @@ apiVersion: v1
 entries:
   klone-operator:
   - apiVersion: v2
+    appVersion: v1.0.56
+    created: "2026-03-09T18:05:38.062119+05:30"
+    description: A Helm chart for Klone Operator - Deploy nested K3s clusters inside
+      Kubernetes
+    digest: 802865f75ff144c6ff8c57d608935e1020f3d79f453527b829f2c8d586d2a7c7
+    home: https://github.com/Raghavendiran-2002/klone
+    icon: https://k3s.io/img/k3s-logo-light.svg
+    keywords:
+    - kubernetes
+    - k3s
+    - nested-clusters
+    - operator
+    - klone
+    maintainers:
+    - email: raghavendiran46461@gmail.com
+      name: Raghav
+    name: klone-operator
+    sources:
+    - https://github.com/Raghavendiran-2002/klone
+    type: application
+    urls:
+    - https://raghavendiran-2002.github.io/klone/helm-charts/klone-operator-1.0.56.tgz
+    version: 1.0.56
+  - apiVersion: v2
     appVersion: v1.0.54
-    created: "2026-03-09T14:53:41.194283+05:30"
+    created: "2026-03-09T18:05:38.0615+05:30"
     description: A Helm chart for Klone Operator - Deploy nested K3s clusters inside
       Kubernetes
     digest: 2f29ee5265f2ed42fd5e73d40149050935a772817bb28c7c7c28d09dd64887e6
@@ -25,4 +49,4 @@ entries:
     urls:
     - https://raghavendiran-2002.github.io/klone/helm-charts/klone-operator-1.0.55.tgz
     version: 1.0.55
-generated: "2026-03-09T14:53:41.193106+05:30"
+generated: "2026-03-09T18:05:38.060386+05:30"
