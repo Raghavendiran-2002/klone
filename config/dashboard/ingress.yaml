@@ -1,0 +1,33 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: klone-dashboard
+  namespace: klone
+  annotations:
+    # Use shared ALB group - all Klone ingresses will share the same ALB
+    alb.ingress.kubernetes.io/group.name: klone
+    # Dashboard has highest priority (lowest order number)
+    alb.ingress.kubernetes.io/group.order: "1"
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTP": 80}]'
+    # Optional: Add HTTPS with certificate
+    # alb.ingress.kubernetes.io/certificate-arn: arn:aws:acm:region:account:certificate/xxxxx
+    # alb.ingress.kubernetes.io/listen-ports: '[{"HTTP": 80}, {"HTTPS": 443}]'
+    # alb.ingress.kubernetes.io/ssl-redirect: '443'
+    # Optional: Add external-dns for automatic DNS record creation
+    # external-dns.alpha.kubernetes.io/hostname: klone.example.com
+  labels:
+    app: klone-dashboard
+spec:
+  ingressClassName: alb
+  rules:
+  - http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: klone-dashboard
+            port:
+              number: 80

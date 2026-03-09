@@ -121,7 +121,7 @@ func BuildTailscaleIngress(cluster *klonev1alpha1.KloneCluster) *networkingv1.In
 	}
 }
 
-// BuildLoadBalancerIngress creates an AWS ALB Ingress
+// BuildLoadBalancerIngress creates an AWS ALB Ingress with path-based routing
 func BuildLoadBalancerIngress(cluster *klonev1alpha1.KloneCluster) *networkingv1.Ingress {
 	namespaceName := GetNamespaceName(cluster.Name)
 
@@ -131,6 +131,10 @@ func BuildLoadBalancerIngress(cluster *klonev1alpha1.KloneCluster) *networkingv1
 		"alb.ingress.kubernetes.io/scheme":       "internet-facing",
 		"alb.ingress.kubernetes.io/target-type":  "ip",
 		"alb.ingress.kubernetes.io/listen-ports": `[{"HTTPS":443}]`,
+		// Use shared ALB group to share the same load balancer across all ingresses
+		"alb.ingress.kubernetes.io/group.name": "klone",
+		// Set group order - dashboard will be 1, clusters will be 10+
+		"alb.ingress.kubernetes.io/group.order": "10",
 	}
 
 	if cluster.Spec.Ingress.LoadBalancer != nil {
@@ -161,6 +165,9 @@ func BuildLoadBalancerIngress(cluster *klonev1alpha1.KloneCluster) *networkingv1
 
 	pathTypePrefix := networkingv1.PathTypePrefix
 
+	// Use path-based routing: /<cluster-name>/*
+	clusterPath := fmt.Sprintf("/%s", cluster.Name)
+
 	ingress := &networkingv1.Ingress{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:        GetIngressName(),
@@ -179,7 +186,7 @@ func BuildLoadBalancerIngress(cluster *klonev1alpha1.KloneCluster) *networkingv1
 						HTTP: &networkingv1.HTTPIngressRuleValue{
 							Paths: []networkingv1.HTTPIngressPath{
 								{
-									Path:     "/",
+									Path:     clusterPath,
 									PathType: &pathTypePrefix,
 									Backend: networkingv1.IngressBackend{
 										Service: &networkingv1.IngressServiceBackend{

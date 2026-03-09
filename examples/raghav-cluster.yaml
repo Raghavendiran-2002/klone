@@ -22,17 +22,37 @@ spec:
     replicas: 1
   ingress:
     type: loadbalancer
+    # SHARED ALB ARCHITECTURE:
+    # All KloneClusters and the Dashboard share a single AWS Application Load Balancer
+    # using path-based routing. The operator automatically configures:
+    #
+    # - Dashboard accessible at: https://klone.example.com/
+    # - This cluster's terminal at: https://klone.example.com/raghav-cluster
+    # - Other clusters at: https://klone.example.com/<cluster-name>
+    #
+    # The ALB group name "klone" (configured in annotations) ensures all ingresses
+    # share the same physical load balancer. Priority ordering ensures the dashboard
+    # (priority 1) and cluster terminals (priority 10+) route correctly.
     loadBalancer:
       scheme: internet-facing
       annotations:
         alb.ingress.kubernetes.io/scheme: internet-facing
         alb.ingress.kubernetes.io/target-type: ip
         alb.ingress.kubernetes.io/listen-ports: '[{"HTTP": 80}]'
+        # All Klone ingresses automatically use group.name: "klone" to share the ALB
+        # You don't need to specify this - the operator handles it automatically
+
       # Optional: Configure HTTPS with ACM certificate
+      # When enabled, both dashboard and all cluster terminals will use HTTPS
       # certificateArn: arn:aws:acm:us-east-1:123456789012:certificate/xxxxx
+
       # Optional: Configure external-dns for automatic DNS record creation
+      # This will create DNS records pointing to the shared ALB
+      # Example: klone.example.com → ALB DNS name
+      # Then access dashboard at: https://klone.example.com/
+      # And this cluster at: https://klone.example.com/raghav-cluster
       # externalDNS:
-      #   hostname: raghav.example.com
+      #   hostname: klone.example.com
       #   ttl: 300
   metricsServer:
     enabled: true

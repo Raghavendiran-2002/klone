@@ -10,7 +10,7 @@ controllerManager:
   # Image configuration
   image:
     repository: raghavendiran2002/klone-operator
-    tag: v1.0.54
+    tag: v1.0.56
     pullPolicy: IfNotPresent
 
   # Replica count
@@ -119,6 +119,25 @@ dashboard:
     type: ClusterIP
     port: 80
     targetPort: 8080
+
+  # Ingress configuration for shared ALB
+  ingress:
+    # Enable dashboard ingress (uses shared ALB with KloneClusters)
+    enabled: true
+    # Ingress class name
+    className: alb
+    # ALB group name - all Klone ingresses share the same ALB
+    groupName: klone
+    # ALB scheme (internet-facing or internal)
+    scheme: internet-facing
+    # Target type for ALB
+    targetType: ip
+    # Optional: Certificate ARN for HTTPS
+    # certificateArn: arn:aws:acm:region:account:certificate/xxxxx
+    # Optional: Hostname for external-dns
+    # hostname: klone.example.com
+    # Additional annotations
+    annotations: {}
 
   # Node selector
   nodeSelector: {}
