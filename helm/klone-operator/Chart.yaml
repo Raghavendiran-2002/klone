@@ -2,8 +2,8 @@ apiVersion: v2
 name: klone-operator
 description: A Helm chart for Klone Operator - Deploy nested K3s clusters inside Kubernetes
 type: application
-version: 1.0.58
-appVersion: "v1.0.58"
+version: 1.0.59
+appVersion: "v1.0.59"
 home: https://github.com/Raghavendiran-2002/klone
 sources:
 - https://github.com/Raghavendiran-2002/klone

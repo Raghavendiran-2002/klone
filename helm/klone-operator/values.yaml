@@ -14,7 +14,7 @@ controllerManager:
   # Image configuration
   image:
     repository: raghavendiran2002/klone-operator
-    tag: v1.0.58
+    tag: v1.0.59
     pullPolicy: IfNotPresent
 
   # Replica count
