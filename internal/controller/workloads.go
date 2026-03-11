@@ -226,6 +226,21 @@ func BuildWorkerDeployment(cluster *klonev1alpha1.KloneCluster) *appsv1.Deployme
 					},
 				},
 				Spec: corev1.PodSpec{
+					// Ensure worker is scheduled on same node as control plane
+					Affinity: &corev1.Affinity{
+						PodAffinity: &corev1.PodAffinity{
+							RequiredDuringSchedulingIgnoredDuringExecution: []corev1.PodAffinityTerm{
+								{
+									LabelSelector: &metav1.LabelSelector{
+										MatchLabels: map[string]string{
+											"app": "k3s-control-plane",
+										},
+									},
+									TopologyKey: "kubernetes.io/hostname",
+								},
+							},
+						},
+					},
 					Containers: []corev1.Container{
 						{
 							Name:  "k3s",

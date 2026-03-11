@@ -378,6 +378,18 @@ type KloneClusterStatus struct {
 	// credentialsSecretName is the name of the secret containing cluster credentials (username/password)
 	// +optional
 	CredentialsSecretName string `json:"credentialsSecretName,omitempty"`
+
+	// currentNode is the node where the cluster workloads are currently scheduled
+	// +optional
+	CurrentNode string `json:"currentNode,omitempty"`
+
+	// lastRelocationTime is the timestamp of the last cluster relocation
+	// +optional
+	LastRelocationTime string `json:"lastRelocationTime,omitempty"`
+
+	// relocationReason is the reason for the last relocation
+	// +optional
+	RelocationReason string `json:"relocationReason,omitempty"`
 }
 
 // WorkloadStatus represents the status of a workload

@@ -395,8 +395,16 @@ spec:
                 description: credentialsSecretName is the name of the secret containing
                   cluster credentials (username/password)
                 type: string
+              currentNode:
+                description: currentNode is the node where the cluster workloads are
+                  currently scheduled
+                type: string
               ingressURL:
                 description: ingressURL is the URL to access the cluster terminal
+                type: string
+              lastRelocationTime:
+                description: lastRelocationTime is the timestamp of the last cluster
+                  relocation
                 type: string
               loadBalancerHostname:
                 description: loadBalancerHostname is the hostname of the load balancer
@@ -421,6 +429,9 @@ spec:
                 - Running
                 - Terminating
                 - Failed
+                type: string
+              relocationReason:
+                description: relocationReason is the reason for the last relocation
                 type: string
               serviceCIDR:
                 description: serviceCIDR is the actual CIDR assigned for services

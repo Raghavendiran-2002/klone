@@ -28,6 +28,12 @@ func BuildNamespace(cluster *klonev1alpha1.KloneCluster) *corev1.Namespace {
 
 // BuildPersistentVolume creates a PersistentVolume for the KloneCluster
 func BuildPersistentVolume(cluster *klonev1alpha1.KloneCluster) *corev1.PersistentVolume {
+	return BuildPersistentVolumeWithNode(cluster, "")
+}
+
+// BuildPersistentVolumeWithNode creates a PersistentVolume for the KloneCluster with optional node targeting
+// If targetNode is provided, it will set node affinity to that specific node
+func BuildPersistentVolumeWithNode(cluster *klonev1alpha1.KloneCluster, targetNode string) *corev1.PersistentVolume {
 	pvName := GetPVName(cluster.Name)
 	namespaceName := GetNamespaceName(cluster.Name)
 
@@ -78,8 +84,25 @@ func BuildPersistentVolume(cluster *klonev1alpha1.KloneCluster) *corev1.Persiste
 		},
 	}
 
-	// Add node affinity if enabled
-	if cluster.Spec.Storage.NodeAffinity != nil && cluster.Spec.Storage.NodeAffinity.Enabled {
+	// If targetNode is specified, set node affinity to that specific node
+	if targetNode != "" {
+		pv.Spec.NodeAffinity = &corev1.VolumeNodeAffinity{
+			Required: &corev1.NodeSelector{
+				NodeSelectorTerms: []corev1.NodeSelectorTerm{
+					{
+						MatchExpressions: []corev1.NodeSelectorRequirement{
+							{
+								Key:      "kubernetes.io/hostname",
+								Operator: corev1.NodeSelectorOpIn,
+								Values:   []string{targetNode},
+							},
+						},
+					},
+				},
+			},
+		}
+	} else if cluster.Spec.Storage.NodeAffinity != nil && cluster.Spec.Storage.NodeAffinity.Enabled {
+		// Add node affinity if enabled in spec
 		label := cluster.Spec.Storage.NodeAffinity.Label
 		if label == "" {
 			label = "primary"

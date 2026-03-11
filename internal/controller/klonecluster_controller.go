@@ -66,6 +66,7 @@ type KloneClusterReconciler struct {
 // +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch;create
 // +kubebuilder:rbac:groups="",resources=pods/exec,verbs=create;get;list
 // +kubebuilder:rbac:groups="",resources=pods/log,verbs=get
+// +kubebuilder:rbac:groups="",resources=events,verbs=get;list;watch
 
 // Workloads
 // +kubebuilder:rbac:groups=apps,resources=statefulsets,verbs=get;list;watch;create;update;patch;delete
@@ -261,6 +262,46 @@ func (r *KloneClusterReconciler) reconcileResources(ctx context.Context, cluster
 			return fmt.Errorf("failed to reconcile terminal: %w", err)
 		}
 		log.Info("Reconciled terminal Deployment", "namespace", namespaceName, "name", terminalDep.Name)
+
+		// 7a. Check if terminal pod is schedulable and trigger relocation if needed
+		isUnschedulable, reason, targetNode, err := r.checkTerminalPodSchedulability(ctx, cluster)
+		if err != nil {
+			log.Error(err, "Failed to check terminal pod schedulability")
+		} else if isUnschedulable {
+			log.Info("Terminal pod is unschedulable", "reason", reason, "targetNode", targetNode)
+
+			// Check if we should relocate (not too frequent, not already in progress)
+			if r.shouldRelocate(ctx, cluster) {
+				log.Info("Triggering cluster relocation to resolve terminal pod scheduling issue",
+					"targetNode", targetNode, "reason", reason)
+
+				// Set relocation in progress condition
+				if err := r.setRelocationCondition(ctx, cluster, true, reason); err != nil {
+					log.Error(err, "Failed to set relocation condition")
+				}
+
+				// Trigger relocation
+				if err := r.relocateClusterToNode(ctx, cluster, targetNode); err != nil {
+					log.Error(err, "Failed to relocate cluster", "targetNode", targetNode)
+					// Clear relocation condition on failure
+					if err := r.setRelocationCondition(ctx, cluster, false, fmt.Sprintf("Relocation failed: %v", err)); err != nil {
+						log.Error(err, "Failed to clear relocation condition")
+					}
+					return fmt.Errorf("relocation failed: %w", err)
+				}
+
+				// Clear relocation condition on success
+				if err := r.setRelocationCondition(ctx, cluster, false, "Relocation completed successfully"); err != nil {
+					log.Error(err, "Failed to clear relocation condition")
+				}
+
+				log.Info("Cluster relocation completed successfully", "targetNode", targetNode)
+				// Requeue immediately to recreate resources on new node
+				return nil
+			} else {
+				log.Info("Relocation skipped (already in progress or too frequent)")
+			}
+		}
 	} else {
 		log.Info("Waiting for control plane and workers to be ready before deploying terminal",
 			"controlPlaneReady", controlPlaneReady, "workerReady", workerReady)

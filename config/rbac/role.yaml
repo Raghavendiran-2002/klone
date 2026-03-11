@@ -7,6 +7,15 @@ rules:
 - apiGroups:
   - ""
   resources:
+  - events
+  - nodes
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - ""
+  resources:
   - namespaces
   - persistentvolumeclaims
   - persistentvolumes
@@ -27,14 +36,6 @@ rules:
   - namespaces/finalize
   verbs:
   - update
-- apiGroups:
-  - ""
-  resources:
-  - nodes
-  verbs:
-  - get
-  - list
-  - watch
 - apiGroups:
   - ""
   resources:
