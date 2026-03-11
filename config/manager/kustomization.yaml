@@ -5,4 +5,4 @@ kind: Kustomization
 images:
 - name: controller
   newName: raghavendiran2002/klone-operator
-  newTag: v1.0.61
+  newTag: v1.1.1

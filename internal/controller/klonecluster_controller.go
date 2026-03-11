@@ -73,8 +73,7 @@ type KloneClusterReconciler struct {
 // +kubebuilder:rbac:groups=batch,resources=jobs,verbs=get;list;watch;create;update;patch;delete
 
 // Networking
-// Ingress RBAC removed - no longer creating ingresses for klone-terminal
-// Dashboard accesses terminal service directly via K8s service DNS
+// +kubebuilder:rbac:groups=networking.k8s.io,resources=ingresses,verbs=get;list;watch;create;update;patch;delete
 
 // RBAC for ArgoCD integration
 // +kubebuilder:rbac:groups="",resources=serviceaccounts,verbs=get;list;watch;create;update;patch;delete
