@@ -484,17 +484,25 @@ func (r *KloneClusterReconciler) createOrUpdate(ctx context.Context, obj client.
 // createOrUpdatePV handles PV creation/update (no owner reference for cluster-scoped resources)
 func (r *KloneClusterReconciler) createOrUpdatePV(ctx context.Context, pv *corev1.PersistentVolume) error {
 	existing := &corev1.PersistentVolume{}
-	err := r.Get(ctx, types.NamespacedName{Name: pv.Name}, existing)
-	if err != nil {
-		if apierrors.IsNotFound(err) {
-			return r.Create(ctx, pv)
-		}
-		return err
-	}
+	existing.Name = pv.Name // Set name before CreateOrPatch
 
-	// PV exists, update if needed
-	pv.SetResourceVersion(existing.GetResourceVersion())
-	return r.Update(ctx, pv)
+	// Use CreateOrPatch to handle conflicts automatically with retries
+	_, err := controllerutil.CreateOrPatch(ctx, r.Client, existing, func() error {
+		// Only update certain fields to avoid conflicts with PV controller
+		// Don't update if PV is already bound to avoid disrupting existing bindings
+		if existing.Status.Phase == corev1.VolumeBound {
+			return nil
+		}
+
+		// Copy spec fields
+		existing.Spec = pv.Spec
+		existing.Labels = pv.Labels
+		existing.Annotations = pv.Annotations
+
+		return nil
+	})
+
+	return err
 }
 
 // isStatefulSetReady checks if a StatefulSet has all replicas ready
@@ -997,6 +1005,14 @@ func (r *KloneClusterReconciler) clearNamespaceFinalizers(ctx context.Context, n
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *KloneClusterReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	// Set up field indexer for listing pods by node name
+	if err := mgr.GetFieldIndexer().IndexField(context.Background(), &corev1.Pod{}, "spec.nodeName", func(obj client.Object) []string {
+		pod := obj.(*corev1.Pod)
+		return []string{pod.Spec.NodeName}
+	}); err != nil {
+		return err
+	}
+
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&klonev1alpha1.KloneCluster{}).
 		// Watch owned resources
