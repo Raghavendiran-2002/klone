@@ -73,7 +73,8 @@ type KloneClusterReconciler struct {
 // +kubebuilder:rbac:groups=batch,resources=jobs,verbs=get;list;watch;create;update;patch;delete
 
 // Networking
-// +kubebuilder:rbac:groups=networking.k8s.io,resources=ingresses,verbs=get;list;watch;create;update;patch;delete
+// Ingress RBAC removed - no longer creating ingresses for klone-terminal
+// Dashboard accesses terminal service directly via K8s service DNS
 
 // RBAC for ArgoCD integration
 // +kubebuilder:rbac:groups="",resources=serviceaccounts,verbs=get;list;watch;create;update;patch;delete
@@ -266,14 +267,8 @@ func (r *KloneClusterReconciler) reconcileResources(ctx context.Context, cluster
 			"controlPlaneReady", controlPlaneReady, "workerReady", workerReady)
 	}
 
-	// 8. Reconcile Ingress (if configured)
-	ingress := BuildIngress(cluster)
-	if ingress != nil {
-		if err := r.createOrUpdate(ctx, ingress); err != nil {
-			return fmt.Errorf("failed to reconcile ingress: %w", err)
-		}
-		log.Info("Reconciled Ingress", "namespace", namespaceName, "name", ingress.Name, "type", cluster.Spec.Ingress.Type)
-	}
+	// 8. Ingress removed - Dashboard accesses terminal service directly
+	// Terminal service (klone-terminal) is still created above at step 4
 
 	// 9. Ensure host metrics-server is installed (run once, K3s clusters have it built-in)
 	if err := r.EnsureHostMetricsServer(ctx); err != nil {
@@ -591,32 +586,8 @@ func (r *KloneClusterReconciler) updateStatus(ctx context.Context, cluster *klon
 		terminalReadyCondition.Message = "Terminal pod is ready and accessible"
 	}
 
-	// Update ingress URL
-	if cluster.Spec.Ingress != nil {
-		ingress := &networkingv1.Ingress{}
-		if err := r.Get(ctx, types.NamespacedName{
-			Name:      GetIngressName(),
-			Namespace: namespaceName,
-		}, ingress); err == nil {
-			// Update ingress URL based on type
-			switch cluster.Spec.Ingress.Type {
-			case IngressTypeTailscale:
-				if cluster.Spec.Ingress.Tailscale != nil && cluster.Spec.Ingress.Tailscale.Domain != "" {
-					cluster.Status.IngressURL = fmt.Sprintf("https://%s-terminal.%s",
-						cluster.Name, cluster.Spec.Ingress.Tailscale.Domain)
-				}
-			case IngressTypeLoadBalancer:
-				// Get LB hostname from ingress status
-				if len(ingress.Status.LoadBalancer.Ingress) > 0 {
-					lbHostname := ingress.Status.LoadBalancer.Ingress[0].Hostname
-					if lbHostname != "" {
-						cluster.Status.LoadBalancerHostname = lbHostname
-						cluster.Status.IngressURL = fmt.Sprintf("https://%s", lbHostname)
-					}
-				}
-			}
-		}
-	}
+	// Ingress URL removed - Dashboard accesses terminal service directly via K8s service
+	// No need to track external ingress URLs anymore
 
 	// Update or append conditions
 	cluster.Status.Conditions = updateCondition(cluster.Status.Conditions, readyCondition)
