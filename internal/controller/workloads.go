@@ -676,10 +676,11 @@ sleep 15
 
 # Login to ArgoCD
 echo "Logging in to ArgoCD..."
-argocd login argocd-server.%s.svc.cluster.local:443 \
+echo "y" | argocd login argocd-server.%s.svc.cluster.local:443 \
   --username=%s \
   --password=%s \
-  --insecure
+  --insecure \
+  --grpc-web
 
 # Register cluster with ArgoCD (argocd cluster add will validate connectivity)
 echo "Registering cluster with ArgoCD..."
