@@ -201,6 +201,16 @@ func (r *KloneClusterReconciler) reconcileResources(ctx context.Context, cluster
 	if err := r.createOrUpdatePV(ctx, pv); err != nil {
 		return fmt.Errorf("failed to reconcile PV: %w", err)
 	}
+
+	// If the PV is still terminating (relocation in progress), do not recreate
+	// the PVC or workloads — let the deletion complete before proceeding.
+	existingPV := &corev1.PersistentVolume{}
+	if err := r.Get(ctx, types.NamespacedName{Name: pv.Name}, existingPV); err == nil {
+		if existingPV.DeletionTimestamp != nil {
+			log.Info("PV deletion is in progress, skipping workload reconciliation until PV is fully removed", "pv", pv.Name)
+			return nil
+		}
+	}
 	log.Info("Reconciled PersistentVolume", "name", pv.Name)
 
 	// For namespaced resources, set owner reference to enable garbage collection
@@ -488,6 +498,13 @@ func (r *KloneClusterReconciler) createOrUpdatePV(ctx context.Context, pv *corev
 
 	// Use CreateOrPatch to handle conflicts automatically with retries
 	_, err := controllerutil.CreateOrPatch(ctx, r.Client, existing, func() error {
+		// If the PV is being deleted (relocation in progress), do not touch it —
+		// updating a terminating PV can interfere with the pv-protection finalizer
+		// removal and stall the deletion indefinitely.
+		if existing.DeletionTimestamp != nil {
+			return nil
+		}
+
 		// Only update certain fields to avoid conflicts with PV controller
 		// Don't update if PV is already bound to avoid disrupting existing bindings
 		if existing.Status.Phase == corev1.VolumeBound {

@@ -22,6 +22,14 @@ func (r *KloneClusterReconciler) relocateClusterToNode(ctx context.Context, clus
 
 	log.Info("Starting cluster relocation", "cluster", cluster.Name, "targetNode", targetNode)
 
+	// Step 0: Record relocation time BEFORE any destructive operations so the
+	// 5-minute cooldown applies even if the relocation fails partway through.
+	cluster.Status.CurrentNode = targetNode
+	cluster.Status.LastRelocationTime = time.Now().Format(time.RFC3339)
+	if err := r.Status().Update(ctx, cluster); err != nil {
+		log.Error(err, "Failed to persist LastRelocationTime; continuing anyway")
+	}
+
 	// Step 1: Delete terminal deployment
 	if err := r.deleteDeployment(ctx, namespaceName, GetTerminalDeploymentName()); err != nil {
 		return fmt.Errorf("failed to delete terminal deployment: %w", err)
@@ -61,10 +69,15 @@ func (r *KloneClusterReconciler) relocateClusterToNode(ctx context.Context, clus
 	}
 	log.Info("Deleted PV")
 
-	// Step 7: Wait for PV deletion
+	// Step 7: Wait for PV deletion — PV has a pv-protection finalizer that is
+	// removed asynchronously after the PVC is gone.  Rather than blocking the
+	// reconcile loop, treat "still exists but deletion is in flight" as success
+	// and let the next reconcile handle it.
 	if err := r.waitForPVDeletion(ctx, pvName); err != nil {
-		log.Info("Waiting for PV deletion, will retry", "error", err.Error())
-		return err
+		log.Info("PV deletion is in progress, will complete on next reconcile", "pv", pvName)
+		// Return nil so the controller does NOT requeue immediately with an
+		// error-backoff; the 30-second RequeueAfter will pick it up.
+		return nil
 	}
 	log.Info("PV fully deleted")
 
@@ -74,14 +87,6 @@ func (r *KloneClusterReconciler) relocateClusterToNode(ctx context.Context, clus
 		return fmt.Errorf("failed to create PV on target node: %w", err)
 	}
 	log.Info("Created new PV on target node", "targetNode", targetNode)
-
-	// Step 9: Update cluster status to store target node
-	cluster.Status.CurrentNode = targetNode
-	cluster.Status.LastRelocationTime = time.Now().Format(time.RFC3339)
-	if err := r.Status().Update(ctx, cluster); err != nil {
-		log.Error(err, "Failed to update status with target node")
-		// Non-fatal, continue
-	}
 
 	log.Info("Cluster relocation preparation complete. Resources will be recreated on next reconciliation.", "targetNode", targetNode)
 
@@ -243,11 +248,18 @@ func (r *KloneClusterReconciler) setRelocationCondition(ctx context.Context, clu
 		status = metav1.ConditionTrue
 	}
 
+	// condition.Reason must match ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+	// Use a fixed CamelCase token; put the human-readable text in Message.
+	conditionReason := "RelocationCompleted"
+	if inProgress {
+		conditionReason = "TerminalPodUnschedulable"
+	}
+
 	condition := metav1.Condition{
 		Type:               "RelocationInProgress",
 		Status:             status,
 		LastTransitionTime: metav1.Now(),
-		Reason:             reason,
+		Reason:             conditionReason,
 		Message:            reason,
 	}
 
