@@ -26,9 +26,11 @@ func BuildNamespace(cluster *klonev1alpha1.KloneCluster) *corev1.Namespace {
 	}
 }
 
-// BuildPersistentVolume creates a PersistentVolume for the KloneCluster
+// BuildPersistentVolume creates a PersistentVolume for the KloneCluster.
+// If a relocation target node is recorded in status, it is honoured so that
+// subsequent reconciles do not strip the node affinity set during relocation.
 func BuildPersistentVolume(cluster *klonev1alpha1.KloneCluster) *corev1.PersistentVolume {
-	return BuildPersistentVolumeWithNode(cluster, "")
+	return BuildPersistentVolumeWithNode(cluster, cluster.Status.CurrentNode)
 }
 
 // BuildPersistentVolumeWithNode creates a PersistentVolume for the KloneCluster with optional node targeting

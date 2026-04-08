@@ -264,6 +264,37 @@ func (r *KloneClusterReconciler) reconcileResources(ctx context.Context, cluster
 		return nil
 	}
 
+	// 7a. If the worker is not ready, check whether it is stuck due to pod-affinity
+	// conflicts (control-plane landed on a full node).  Trigger relocation early
+	// so we don't wait for the terminal to be created first.
+	if !workerReady {
+		isUnschedulable, reason, targetNode, err := r.checkWorkerPodSchedulability(ctx, cluster)
+		if err != nil {
+			log.Error(err, "Failed to check worker pod schedulability")
+		} else if isUnschedulable {
+			log.Info("Worker pod is unschedulable, triggering relocation",
+				"reason", reason, "targetNode", targetNode)
+			if r.shouldRelocate(ctx, cluster) {
+				if err := r.setRelocationCondition(ctx, cluster, true, reason); err != nil {
+					log.Error(err, "Failed to set relocation condition")
+				}
+				if err := r.relocateClusterToNode(ctx, cluster, targetNode); err != nil {
+					log.Error(err, "Failed to relocate cluster", "targetNode", targetNode)
+					if err2 := r.setRelocationCondition(ctx, cluster, false, fmt.Sprintf("Relocation failed: %v", err)); err2 != nil {
+						log.Error(err2, "Failed to clear relocation condition")
+					}
+					return fmt.Errorf("relocation failed: %w", err)
+				}
+				if err := r.setRelocationCondition(ctx, cluster, false, "Relocation completed successfully"); err != nil {
+					log.Error(err, "Failed to clear relocation condition")
+				}
+				log.Info("Cluster relocation completed successfully", "targetNode", targetNode)
+				return nil
+			}
+			log.Info("Worker relocation skipped (already in progress or too frequent)")
+		}
+	}
+
 	// Only deploy terminal if control plane and workers are ready
 	if controlPlaneReady && workerReady {
 		log.Info("Control plane and workers are ready, deploying terminal")
@@ -273,44 +304,37 @@ func (r *KloneClusterReconciler) reconcileResources(ctx context.Context, cluster
 		}
 		log.Info("Reconciled terminal Deployment", "namespace", namespaceName, "name", terminalDep.Name)
 
-		// 7a. Check if terminal pod is schedulable and trigger relocation if needed
+		// 7b. Check if terminal pod is schedulable and trigger relocation if needed
 		isUnschedulable, reason, targetNode, err := r.checkTerminalPodSchedulability(ctx, cluster)
 		if err != nil {
 			log.Error(err, "Failed to check terminal pod schedulability")
 		} else if isUnschedulable {
 			log.Info("Terminal pod is unschedulable", "reason", reason, "targetNode", targetNode)
 
-			// Check if we should relocate (not too frequent, not already in progress)
 			if r.shouldRelocate(ctx, cluster) {
 				log.Info("Triggering cluster relocation to resolve terminal pod scheduling issue",
 					"targetNode", targetNode, "reason", reason)
 
-				// Set relocation in progress condition
 				if err := r.setRelocationCondition(ctx, cluster, true, reason); err != nil {
 					log.Error(err, "Failed to set relocation condition")
 				}
 
-				// Trigger relocation
 				if err := r.relocateClusterToNode(ctx, cluster, targetNode); err != nil {
 					log.Error(err, "Failed to relocate cluster", "targetNode", targetNode)
-					// Clear relocation condition on failure
 					if err := r.setRelocationCondition(ctx, cluster, false, fmt.Sprintf("Relocation failed: %v", err)); err != nil {
 						log.Error(err, "Failed to clear relocation condition")
 					}
 					return fmt.Errorf("relocation failed: %w", err)
 				}
 
-				// Clear relocation condition on success
 				if err := r.setRelocationCondition(ctx, cluster, false, "Relocation completed successfully"); err != nil {
 					log.Error(err, "Failed to clear relocation condition")
 				}
 
 				log.Info("Cluster relocation completed successfully", "targetNode", targetNode)
-				// Requeue immediately to recreate resources on new node
 				return nil
-			} else {
-				log.Info("Relocation skipped (already in progress or too frequent)")
 			}
+			log.Info("Relocation skipped (already in progress or too frequent)")
 		}
 	} else {
 		log.Info("Waiting for control plane and workers to be ready before deploying terminal",

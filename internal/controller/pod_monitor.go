@@ -131,6 +131,73 @@ func isSchedulingFailureDueToNodeConstraints(reason, message string) bool {
 	return false
 }
 
+// checkWorkerPodSchedulability checks if the k3s-worker pod is unschedulable.
+// This handles the case where the control-plane landed on a full node and the
+// worker's required pod-affinity cannot be satisfied there.
+func (r *KloneClusterReconciler) checkWorkerPodSchedulability(ctx context.Context, cluster *klonev1alpha1.KloneCluster) (bool, string, string, error) {
+	log := logf.FromContext(ctx)
+	namespaceName := cluster.Name
+
+	podList := &corev1.PodList{}
+	if err := r.List(ctx, podList, client.InNamespace(namespaceName), client.MatchingLabels{
+		"app": "k3s-worker",
+	}); err != nil {
+		return false, "", "", fmt.Errorf("failed to list worker pods: %w", err)
+	}
+
+	if len(podList.Items) == 0 {
+		return false, "", "", nil
+	}
+
+	for _, pod := range podList.Items {
+		if pod.Status.Phase == corev1.PodRunning || pod.Status.Phase == corev1.PodSucceeded {
+			continue
+		}
+
+		if pod.Status.Phase != corev1.PodPending {
+			continue
+		}
+
+		// Check pod conditions
+		for _, condition := range pod.Status.Conditions {
+			if condition.Type == corev1.PodScheduled && condition.Status == corev1.ConditionFalse {
+				if isSchedulingFailureDueToNodeConstraints(condition.Reason, condition.Message) {
+					targetNode, err := r.findNodeWithCapacity(ctx, cluster)
+					if err != nil || targetNode == "" {
+						return true, fmt.Sprintf("%s: %s", condition.Reason, condition.Message), "", err
+					}
+					return true, fmt.Sprintf("%s: %s", condition.Reason, condition.Message), targetNode, nil
+				}
+			}
+		}
+
+		// Also check events
+		eventList := &corev1.EventList{}
+		if err := r.List(ctx, eventList, client.InNamespace(namespaceName)); err != nil {
+			log.Error(err, "Failed to list events")
+			continue
+		}
+		for _, event := range eventList.Items {
+			if event.InvolvedObject.Name == pod.Name &&
+				event.InvolvedObject.Kind == "Pod" &&
+				event.Reason == "FailedScheduling" &&
+				isSchedulingFailureDueToNodeConstraints(event.Reason, event.Message) {
+
+				log.Info("FailedScheduling event detected for worker pod",
+					"pod", pod.Name, "message", event.Message)
+
+				targetNode, err := r.findNodeWithCapacity(ctx, cluster)
+				if err != nil || targetNode == "" {
+					return true, event.Message, "", err
+				}
+				return true, event.Message, targetNode, nil
+			}
+		}
+	}
+
+	return false, "", "", nil
+}
+
 // findNodeWithCapacity finds a node that has capacity for control plane, worker, and terminal pods
 func (r *KloneClusterReconciler) findNodeWithCapacity(ctx context.Context, _ *klonev1alpha1.KloneCluster) (string, error) {
 	log := logf.FromContext(ctx)
