@@ -14,7 +14,7 @@ controllerManager:
   # Image configuration
   image:
     repository: raghavendiran2002/klone-operator
-    tag: v1.1.7
+    tag: v1.1.8
     pullPolicy: IfNotPresent
 
   # Replica count
@@ -213,6 +213,15 @@ crds:
 
   # Additional annotations for CRDs
   annotations: {}
+
+# ArgoCD integration configuration
+argocd:
+  # ArgoCD admin username to use for cluster registration.
+  # Leave empty to auto-read from argocd-initial-admin-secret.
+  username: ""
+  # ArgoCD admin password (plaintext) to use for cluster registration.
+  # Leave empty to auto-read from argocd-initial-admin-secret.
+  password: ""
 
 # Image pull secrets (if needed for private registries)
 imagePullSecrets: []

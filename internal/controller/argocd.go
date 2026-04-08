@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"maps"
+	"os"
 
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
@@ -65,8 +66,21 @@ func (d *ArgoCDDetector) IsArgoCDInstalled(ctx context.Context) (bool, error) {
 	return true, nil
 }
 
-// GetArgoCDCredentials retrieves the ArgoCD admin password from the initial admin secret
+// GetArgoCDCredentials retrieves the ArgoCD admin credentials.
+// It first checks the ARGOCD_USERNAME / ARGOCD_PASSWORD environment variables
+// (set via Helm values argocd.username / argocd.password). If those are not
+// set it falls back to reading argocd-initial-admin-secret.
 func (d *ArgoCDDetector) GetArgoCDCredentials(ctx context.Context) (username, password string, err error) {
+	// Check environment variables first (injected by Helm when argocd.password is set)
+	if envPassword := os.Getenv("ARGOCD_PASSWORD"); envPassword != "" {
+		envUsername := os.Getenv("ARGOCD_USERNAME")
+		if envUsername == "" {
+			envUsername = "admin"
+		}
+		return envUsername, envPassword, nil
+	}
+
+	// Fall back to argocd-initial-admin-secret
 	secret := &corev1.Secret{}
 	err = d.client.Get(ctx, types.NamespacedName{
 		Name:      "argocd-initial-admin-secret",
@@ -76,13 +90,11 @@ func (d *ArgoCDDetector) GetArgoCDCredentials(ctx context.Context) (username, pa
 		return "", "", fmt.Errorf("failed to get ArgoCD credentials: %w", err)
 	}
 
-	// Get password from secret
 	passwordBytes, ok := secret.Data["password"]
 	if !ok {
 		return "", "", fmt.Errorf("password not found in argocd-initial-admin-secret")
 	}
 
-	// ArgoCD admin username is always "admin"
 	return "admin", string(passwordBytes), nil
 }
 

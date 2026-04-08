@@ -49,6 +49,19 @@ spec:
         - --leader-elect
         {{- end }}
         - --health-probe-bind-address={{ .Values.controllerManager.healthProbe.bindAddress }}
+        {{- if .Values.argocd.password }}
+        env:
+        - name: ARGOCD_USERNAME
+          valueFrom:
+            secretKeyRef:
+              name: {{ include "klone-operator.fullname" . }}-argocd-credentials
+              key: username
+        - name: ARGOCD_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: {{ include "klone-operator.fullname" . }}-argocd-credentials
+              key: password
+        {{- end }}
         ports: []
         securityContext:
           {{- toYaml .Values.controllerManager.securityContext | nindent 10 }}
