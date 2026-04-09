@@ -428,6 +428,14 @@ func (r *KloneClusterReconciler) reconcileResources(ctx context.Context, cluster
 		if err != nil {
 			log.Error(err, "Failed to determine if should register with ArgoCD")
 		} else if shouldRegister && !cluster.Status.ArgoCDRegistered {
+			// If the job permanently failed (BackoffLimitExceeded), stop creating new jobs.
+			// The user can clear the annotation to retry.
+			const failedAnnotation = "klone.io/argocd-registration-failed"
+			permFailed := cluster.Annotations != nil && cluster.Annotations[failedAnnotation] != ""
+			if permFailed {
+				log.Info("ArgoCD registration permanently failed — clear annotation to retry",
+					"failedAt", cluster.Annotations[failedAnnotation])
+			} else {
 			log.Info("Registering cluster with ArgoCD", "argocdNamespace", argoCDNamespace)
 
 			// Create ServiceAccount, Role, and RoleBinding for ArgoCD registration
@@ -462,32 +470,45 @@ func (r *KloneClusterReconciler) reconcileResources(ctx context.Context, cluster
 				job := BuildArgoCDRegisterJob(cluster, argoCDNamespace, username, password)
 				job.SetNamespace(namespaceName)
 
-				// Note: Cannot set owner reference across namespaces
-				// Job will be cleaned up via TTLSecondsAfterFinished
-
 				// Check if job already exists
 				existingJob := &batchv1.Job{}
 				jobKey := client.ObjectKey{Namespace: namespaceName, Name: job.Name}
 				err := r.Get(ctx, jobKey, existingJob)
 				if err != nil && apierrors.IsNotFound(err) {
-					// Create the job
 					if err := r.Create(ctx, job); err != nil {
 						log.Error(err, "Failed to create ArgoCD registration job")
 					} else {
 						log.Info("Created ArgoCD registration job", "namespace", namespaceName, "name", job.Name)
 					}
 				} else if err == nil {
-					// Job exists, check if it completed successfully
 					if existingJob.Status.Succeeded > 0 {
-						// Mark as registered in status
 						cluster.Status.ArgoCDRegistered = true
 						cluster.Status.ArgoCDClusterName = GetClusterRegistrationName(cluster)
 						log.Info("ArgoCD registration job completed successfully")
-					} else if existingJob.Status.Failed > 0 {
-						log.Info("ArgoCD registration job failed, will retry on next reconcile")
+					} else {
+						// Detect BackoffLimitExceeded — stop recreating indefinitely
+						for _, cond := range existingJob.Status.Conditions {
+							if cond.Type == batchv1.JobFailed &&
+								cond.Status == corev1.ConditionTrue &&
+								cond.Reason == "BackoffLimitExceeded" {
+								log.Info("ArgoCD registration job permanently failed (BackoffLimitExceeded) — setting annotation to stop retrying. Remove annotation klone.io/argocd-registration-failed to retry.")
+								if cluster.Annotations == nil {
+									cluster.Annotations = make(map[string]string)
+								}
+								cluster.Annotations[failedAnnotation] = metav1.Now().UTC().Format(time.RFC3339)
+								if updateErr := r.Update(ctx, cluster); updateErr != nil {
+									log.Error(updateErr, "Failed to set argocd-registration-failed annotation")
+								}
+								break
+							}
+						}
+						if existingJob.Status.Failed > 0 {
+							log.Info("ArgoCD registration job is retrying", "failed", existingJob.Status.Failed)
+						}
 					}
 				}
 			}
+			} // end permFailed else
 		} else if shouldRegister && cluster.Status.ArgoCDRegistered {
 			log.V(1).Info("Cluster already registered with ArgoCD", "clusterName", cluster.Status.ArgoCDClusterName)
 		}
@@ -496,7 +517,10 @@ func (r *KloneClusterReconciler) reconcileResources(ctx context.Context, cluster
 	return nil
 }
 
-// createOrUpdate creates or updates a resource
+// createOrUpdate creates a resource if it doesn't exist, or patches it with only
+// the fields we own. Using Patch (strategic merge) instead of Update avoids:
+//   - Overwriting fields managed by Kubernetes (e.g. Service.spec.clusterIP)
+//   - Triggering watch events when nothing actually changed (preventing reconcile loops)
 func (r *KloneClusterReconciler) createOrUpdate(ctx context.Context, obj client.Object) error {
 	key := client.ObjectKeyFromObject(obj)
 	existing := obj.DeepCopyObject().(client.Object)
@@ -504,15 +528,15 @@ func (r *KloneClusterReconciler) createOrUpdate(ctx context.Context, obj client.
 	err := r.Get(ctx, key, existing)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
-			// Create new resource
 			return r.Create(ctx, obj)
 		}
 		return err
 	}
 
-	// Resource exists, update if needed
+	// Patch only — strategic merge patch writes nothing when the resource is
+	// already in the desired state, so no spurious watch events are emitted.
 	obj.SetResourceVersion(existing.GetResourceVersion())
-	return r.Update(ctx, obj)
+	return r.Patch(ctx, obj, client.MergeFrom(existing))
 }
 
 // createOrUpdatePV handles PV creation/update (no owner reference for cluster-scoped resources)
@@ -678,24 +702,59 @@ func (r *KloneClusterReconciler) updateStatus(ctx context.Context, cluster *klon
 	// Ingress URL removed - Dashboard accesses terminal service directly via K8s service
 	// No need to track external ingress URLs anymore
 
-	// Update or append conditions
-	cluster.Status.Conditions = updateCondition(cluster.Status.Conditions, readyCondition)
-	cluster.Status.Conditions = updateCondition(cluster.Status.Conditions, terminalReadyCondition)
+	// Only write status when something actually changed — prevents the tight
+	// re-reconcile loop caused by status.Update triggering a For() watch event.
+	dirty := false
+	var changed bool
+	cluster.Status.Conditions, changed = updateCondition(cluster.Status.Conditions, readyCondition)
+	dirty = dirty || changed
+	cluster.Status.Conditions, changed = updateCondition(cluster.Status.Conditions, terminalReadyCondition)
+	dirty = dirty || changed
+
+	// Also dirty if workload counts or phase changed
+	if len(cluster.Status.Workloads) != len(workloads) {
+		dirty = true
+	} else {
+		for i, w := range workloads {
+			if i >= len(cluster.Status.Workloads) ||
+				cluster.Status.Workloads[i].Ready != w.Ready ||
+				cluster.Status.Workloads[i].Desired != w.Desired {
+				dirty = true
+				break
+			}
+		}
+	}
+
+	cluster.Status.Workloads = workloads
+
+	if !dirty {
+		return nil
+	}
 
 	log.Info("Updating status", "phase", cluster.Status.Phase, "workloads", len(workloads))
-
 	return r.Status().Update(ctx, cluster)
 }
 
-// updateCondition updates or appends a condition to the condition list
-func updateCondition(conditions []metav1.Condition, newCondition metav1.Condition) []metav1.Condition {
+// updateCondition updates or appends a condition to the condition list.
+// LastTransitionTime is only updated when the Status field actually changes,
+// preventing spurious status writes on every reconcile.
+func updateCondition(conditions []metav1.Condition, newCondition metav1.Condition) ([]metav1.Condition, bool) {
 	for i, condition := range conditions {
 		if condition.Type == newCondition.Type {
+			// Preserve the transition time when status hasn't changed
+			if condition.Status == newCondition.Status {
+				newCondition.LastTransitionTime = condition.LastTransitionTime
+			}
+			// Detect if anything meaningful changed
+			changed := condition.Status != newCondition.Status ||
+				condition.Reason != newCondition.Reason ||
+				condition.Message != newCondition.Message
 			conditions[i] = newCondition
-			return conditions
+			return conditions, changed
 		}
 	}
-	return append(conditions, newCondition)
+	// Condition is new
+	return append(conditions, newCondition), true
 }
 
 // handleDeletion handles cluster deletion with finalizer cleanup
