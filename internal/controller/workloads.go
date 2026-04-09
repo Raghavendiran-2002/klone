@@ -79,6 +79,8 @@ func BuildControlPlaneStatefulSet(cluster *klonev1alpha1.KloneCluster) *appsv1.S
 					Annotations: map[string]string{
 						"container.apparmor.security.beta.kubernetes.io/k3s": "unconfined",
 						"container.seccomp.security.alpha.kubernetes.io/k3s": "unconfined",
+						// Prevent Karpenter from evicting the control plane pod (prevents hostPath data loss)
+						"karpenter.sh/do-not-disrupt": "true",
 					},
 				},
 				Spec: corev1.PodSpec{

@@ -108,14 +108,26 @@ func (r *KloneClusterReconciler) checkTerminalPodSchedulability(ctx context.Cont
 func isSchedulingFailureDueToNodeConstraints(reason, message string) bool {
 	// Check for various node constraint failures
 	constraintIndicators := []string{
+		// Pod capacity
 		"Insufficient pods",
 		"PodExceedsFreePods",
+		"Too many pods",
+		// Pod affinity / anti-affinity
 		"node(s) didn't match pod affinity rules",
 		"node(s) didn't match pod affinity/anti-affinity",
 		"didn't match pod affinity rules",
-		"no nodes available to schedule pods",
-		"Too many pods",
 		"pod affinity",
+		// Node affinity / selector (Karpenter node replacement, consolidation, drift)
+		"node affinity",
+		"didn't match node affinity",
+		"node(s) didn't match node affinity",
+		"node selector",
+		// Volume node affinity conflict (hostPath PV pinned to evicted/deleted node)
+		"volume node affinity conflict",
+		"had volume node affinity conflict",
+		// General
+		"no nodes available to schedule pods",
+		"no nodes available",
 	}
 
 	messageLower := strings.ToLower(message)
