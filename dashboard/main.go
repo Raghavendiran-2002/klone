@@ -30,6 +30,14 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
+// contextKey is a private type for context keys to avoid collisions.
+type contextKey string
+
+const (
+	claimsKey            contextKey = "claims"
+	defaultAdminUsername            = "admin"
+)
+
 var (
 	k8sClient     client.Client
 	scheme        = k8sruntime.NewScheme()
@@ -45,7 +53,7 @@ func init() {
 	// Load admin credentials from environment variables
 	adminUsername = os.Getenv("ADMIN_USERNAME")
 	if adminUsername == "" {
-		adminUsername = "admin"
+		adminUsername = defaultAdminUsername
 	}
 
 	adminPassword = os.Getenv("ADMIN_PASSWORD")
@@ -177,11 +185,13 @@ func loginHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(LoginResponse{
+	if err := json.NewEncoder(w).Encode(LoginResponse{
 		Token:       tokenString,
 		Role:        role,
 		ClusterName: clusterName,
-	})
+	}); err != nil {
+		http.Error(w, "Failed to encode response", http.StatusInternalServerError)
+	}
 }
 
 // validateClusterCredentials checks if username/password match any cluster credentials
@@ -255,7 +265,7 @@ func jwtMiddleware(next http.HandlerFunc) http.HandlerFunc {
 		}
 
 		// Store claims in request context
-		ctx := context.WithValue(r.Context(), "claims", claims)
+		ctx := context.WithValue(r.Context(), claimsKey, claims)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	}
 }
@@ -268,7 +278,7 @@ func credentialsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Get claims from context
-	claims, ok := r.Context().Value("claims").(*Claims)
+	claims, ok := r.Context().Value(claimsKey).(*Claims)
 	if !ok || claims.Role != "admin" {
 		http.Error(w, "Forbidden: Admin access required", http.StatusForbidden)
 		return
@@ -311,7 +321,9 @@ func credentialsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(credentials)
+	if err := json.NewEncoder(w).Encode(credentials); err != nil {
+		http.Error(w, "Failed to encode response", http.StatusInternalServerError)
+	}
 }
 
 // ////////////////////////////////////////////////////
@@ -352,7 +364,7 @@ func listClusters(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Get claims from context
-	claims, ok := r.Context().Value("claims").(*Claims)
+	claims, ok := r.Context().Value(claimsKey).(*Claims)
 	if !ok {
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
