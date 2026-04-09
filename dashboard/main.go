@@ -31,11 +31,11 @@ import (
 )
 
 var (
-	k8sClient      client.Client
-	scheme         = k8sruntime.NewScheme()
-	adminUsername  string
-	adminPassword  string
-	jwtSecretKey   = []byte("klone-dashboard-secret-key-change-in-production")
+	k8sClient     client.Client
+	scheme        = k8sruntime.NewScheme()
+	adminUsername string
+	adminPassword string
+	jwtSecretKey  = []byte("klone-dashboard-secret-key-change-in-production")
 )
 
 func init() {
@@ -109,7 +109,7 @@ func initClient() error {
 // Claims represents the JWT claims
 type Claims struct {
 	Username    string `json:"username"`
-	Role        string `json:"role"` // "admin" or "user"
+	Role        string `json:"role"`                  // "admin" or "user"
 	ClusterName string `json:"clusterName,omitempty"` // Only for user role
 	jwt.RegisteredClaims
 }
@@ -122,8 +122,8 @@ type LoginRequest struct {
 
 // LoginResponse represents the login response payload
 type LoginResponse struct {
-	Token string `json:"token"`
-	Role  string `json:"role"`
+	Token       string `json:"token"`
+	Role        string `json:"role"`
 	ClusterName string `json:"clusterName,omitempty"`
 }
 
@@ -245,7 +245,7 @@ func jwtMiddleware(next http.HandlerFunc) http.HandlerFunc {
 
 		// Parse and validate token
 		claims := &Claims{}
-		token, err := jwt.ParseWithClaims(tokenString, claims, func(token *jwt.Token) (interface{}, error) {
+		token, err := jwt.ParseWithClaims(tokenString, claims, func(token *jwt.Token) (any, error) {
 			return jwtSecretKey, nil
 		})
 

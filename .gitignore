@@ -27,6 +27,8 @@ __pycache__/
 venv/
 env/
 ENV/
+!vendor/**/env/
+!vendor/**/env/**
 
 # Local test files
 test-*

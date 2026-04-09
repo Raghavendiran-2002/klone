@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"maps"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -437,78 +438,78 @@ func (r *KloneClusterReconciler) reconcileResources(ctx context.Context, cluster
 				log.Info("ArgoCD registration permanently failed — clear annotation to retry",
 					"failedAt", cluster.Annotations[failedAnnotation])
 			} else {
-			log.Info("Registering cluster with ArgoCD", "argocdNamespace", argoCDNamespace)
+				log.Info("Registering cluster with ArgoCD", "argocdNamespace", argoCDNamespace)
 
-			// Create ServiceAccount, Role, and RoleBinding for ArgoCD registration
-			sa := BuildArgoCDServiceAccount(cluster)
-			if err := r.createOrUpdate(ctx, sa); err != nil {
-				log.Error(err, "Failed to reconcile ArgoCD ServiceAccount")
-			} else {
-				log.Info("Reconciled ArgoCD ServiceAccount", "namespace", namespaceName, "name", sa.Name)
-			}
+				// Create ServiceAccount, Role, and RoleBinding for ArgoCD registration
+				sa := BuildArgoCDServiceAccount(cluster)
+				if err := r.createOrUpdate(ctx, sa); err != nil {
+					log.Error(err, "Failed to reconcile ArgoCD ServiceAccount")
+				} else {
+					log.Info("Reconciled ArgoCD ServiceAccount", "namespace", namespaceName, "name", sa.Name)
+				}
 
-			role := BuildArgoCDRole(cluster)
-			if err := r.createOrUpdate(ctx, role); err != nil {
-				log.Error(err, "Failed to reconcile ArgoCD Role")
-			} else {
-				log.Info("Reconciled ArgoCD Role", "namespace", namespaceName, "name", role.Name)
-			}
+				role := BuildArgoCDRole(cluster)
+				if err := r.createOrUpdate(ctx, role); err != nil {
+					log.Error(err, "Failed to reconcile ArgoCD Role")
+				} else {
+					log.Info("Reconciled ArgoCD Role", "namespace", namespaceName, "name", role.Name)
+				}
 
-			rb := BuildArgoCDRoleBinding(cluster)
-			if err := r.createOrUpdate(ctx, rb); err != nil {
-				log.Error(err, "Failed to reconcile ArgoCD RoleBinding")
-			} else {
-				log.Info("Reconciled ArgoCD RoleBinding", "namespace", namespaceName, "name", rb.Name)
-			}
+				rb := BuildArgoCDRoleBinding(cluster)
+				if err := r.createOrUpdate(ctx, rb); err != nil {
+					log.Error(err, "Failed to reconcile ArgoCD RoleBinding")
+				} else {
+					log.Info("Reconciled ArgoCD RoleBinding", "namespace", namespaceName, "name", rb.Name)
+				}
 
-			// Get ArgoCD credentials
-			detector := NewArgoCDDetector(r.Client, argoCDNamespace)
-			username, password, err := detector.GetArgoCDCredentials(ctx)
-			if err != nil {
-				log.Error(err, "Failed to get ArgoCD credentials")
-			} else {
-				// Create ArgoCD registration Job
-				job := BuildArgoCDRegisterJob(cluster, argoCDNamespace, username, password)
-				job.SetNamespace(namespaceName)
+				// Get ArgoCD credentials
+				detector := NewArgoCDDetector(r.Client, argoCDNamespace)
+				username, password, err := detector.GetArgoCDCredentials(ctx)
+				if err != nil {
+					log.Error(err, "Failed to get ArgoCD credentials")
+				} else {
+					// Create ArgoCD registration Job
+					job := BuildArgoCDRegisterJob(cluster, argoCDNamespace, username, password)
+					job.SetNamespace(namespaceName)
 
-				// Check if job already exists
-				existingJob := &batchv1.Job{}
-				jobKey := client.ObjectKey{Namespace: namespaceName, Name: job.Name}
-				err := r.Get(ctx, jobKey, existingJob)
-				if err != nil && apierrors.IsNotFound(err) {
-					if err := r.Create(ctx, job); err != nil {
-						log.Error(err, "Failed to create ArgoCD registration job")
-					} else {
-						log.Info("Created ArgoCD registration job", "namespace", namespaceName, "name", job.Name)
-					}
-				} else if err == nil {
-					if existingJob.Status.Succeeded > 0 {
-						cluster.Status.ArgoCDRegistered = true
-						cluster.Status.ArgoCDClusterName = GetClusterRegistrationName(cluster)
-						log.Info("ArgoCD registration job completed successfully")
-					} else {
-						// Detect BackoffLimitExceeded — stop recreating indefinitely
-						for _, cond := range existingJob.Status.Conditions {
-							if cond.Type == batchv1.JobFailed &&
-								cond.Status == corev1.ConditionTrue &&
-								cond.Reason == "BackoffLimitExceeded" {
-								log.Info("ArgoCD registration job permanently failed (BackoffLimitExceeded) — setting annotation to stop retrying. Remove annotation klone.io/argocd-registration-failed to retry.")
-								if cluster.Annotations == nil {
-									cluster.Annotations = make(map[string]string)
-								}
-								cluster.Annotations[failedAnnotation] = metav1.Now().UTC().Format(time.RFC3339)
-								if updateErr := r.Update(ctx, cluster); updateErr != nil {
-									log.Error(updateErr, "Failed to set argocd-registration-failed annotation")
-								}
-								break
-							}
+					// Check if job already exists
+					existingJob := &batchv1.Job{}
+					jobKey := client.ObjectKey{Namespace: namespaceName, Name: job.Name}
+					err := r.Get(ctx, jobKey, existingJob)
+					if err != nil && apierrors.IsNotFound(err) {
+						if err := r.Create(ctx, job); err != nil {
+							log.Error(err, "Failed to create ArgoCD registration job")
+						} else {
+							log.Info("Created ArgoCD registration job", "namespace", namespaceName, "name", job.Name)
 						}
-						if existingJob.Status.Failed > 0 {
-							log.Info("ArgoCD registration job is retrying", "failed", existingJob.Status.Failed)
+					} else if err == nil {
+						if existingJob.Status.Succeeded > 0 {
+							cluster.Status.ArgoCDRegistered = true
+							cluster.Status.ArgoCDClusterName = GetClusterRegistrationName(cluster)
+							log.Info("ArgoCD registration job completed successfully")
+						} else {
+							// Detect BackoffLimitExceeded — stop recreating indefinitely
+							for _, cond := range existingJob.Status.Conditions {
+								if cond.Type == batchv1.JobFailed &&
+									cond.Status == corev1.ConditionTrue &&
+									cond.Reason == "BackoffLimitExceeded" {
+									log.Info("ArgoCD registration job permanently failed (BackoffLimitExceeded) — setting annotation to stop retrying. Remove annotation klone.io/argocd-registration-failed to retry.")
+									if cluster.Annotations == nil {
+										cluster.Annotations = make(map[string]string)
+									}
+									cluster.Annotations[failedAnnotation] = metav1.Now().UTC().Format(time.RFC3339)
+									if updateErr := r.Update(ctx, cluster); updateErr != nil {
+										log.Error(updateErr, "Failed to set argocd-registration-failed annotation")
+									}
+									break
+								}
+							}
+							if existingJob.Status.Failed > 0 {
+								log.Info("ArgoCD registration job is retrying", "failed", existingJob.Status.Failed)
+							}
 						}
 					}
 				}
-			}
 			} // end permFailed else
 		} else if shouldRegister && cluster.Status.ArgoCDRegistered {
 			log.V(1).Info("Cluster already registered with ArgoCD", "clusterName", cluster.Status.ArgoCDClusterName)
@@ -578,18 +579,14 @@ func applyMetadata(existing, desired client.Object) {
 	if labels == nil {
 		labels = make(map[string]string)
 	}
-	for k, v := range desired.GetLabels() {
-		labels[k] = v
-	}
+	maps.Copy(labels, desired.GetLabels())
 	existing.SetLabels(labels)
 
 	annotations := existing.GetAnnotations()
 	if annotations == nil {
 		annotations = make(map[string]string)
 	}
-	for k, v := range desired.GetAnnotations() {
-		annotations[k] = v
-	}
+	maps.Copy(annotations, desired.GetAnnotations())
 	existing.SetAnnotations(annotations)
 }
 

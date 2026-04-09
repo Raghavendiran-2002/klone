@@ -281,4 +281,3 @@ func isNodeReady(node *corev1.Node) bool {
 	}
 	return false
 }
-
