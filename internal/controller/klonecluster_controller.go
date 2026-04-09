@@ -25,6 +25,7 @@ import (
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -517,26 +518,79 @@ func (r *KloneClusterReconciler) reconcileResources(ctx context.Context, cluster
 	return nil
 }
 
-// createOrUpdate creates a resource if it doesn't exist, or patches it with only
-// the fields we own. Using Patch (strategic merge) instead of Update avoids:
-//   - Overwriting fields managed by Kubernetes (e.g. Service.spec.clusterIP)
-//   - Triggering watch events when nothing actually changed (preventing reconcile loops)
-func (r *KloneClusterReconciler) createOrUpdate(ctx context.Context, obj client.Object) error {
-	key := client.ObjectKeyFromObject(obj)
-	existing := obj.DeepCopyObject().(client.Object)
+// createOrUpdate ensures a resource exists and is up to date. On creation it
+// uses r.Create. On update it applies only intentional field changes via a
+// merge patch computed against the live server state. This avoids sending null
+// for server-managed fields (uid, creationTimestamp, spec.finalizers on Namespace,
+// clusterIP on Service, etc.) which would be rejected by the API server.
+func (r *KloneClusterReconciler) createOrUpdate(ctx context.Context, desired client.Object) error {
+	key := client.ObjectKeyFromObject(desired)
+	existing := desired.DeepCopyObject().(client.Object)
 
-	err := r.Get(ctx, key, existing)
-	if err != nil {
+	if err := r.Get(ctx, key, existing); err != nil {
 		if apierrors.IsNotFound(err) {
-			return r.Create(ctx, obj)
+			return r.Create(ctx, desired)
 		}
 		return err
 	}
 
-	// Patch only — strategic merge patch writes nothing when the resource is
-	// already in the desired state, so no spurious watch events are emitted.
-	obj.SetResourceVersion(existing.GetResourceVersion())
-	return r.Patch(ctx, obj, client.MergeFrom(existing))
+	// Snapshot the live state as the merge-patch base (before mutations).
+	base := existing.DeepCopyObject().(client.Object)
+
+	// Propagate desired labels and annotations into existing (additive merge).
+	applyMetadata(existing, desired)
+
+	// Copy only the spec fields this controller owns. Fields NOT listed here
+	// (server-managed ones such as spec.finalizers on Namespace, clusterIP on
+	// Service) remain in both base and existing unchanged, so they never appear
+	// in the computed patch body.
+	switch d := desired.(type) {
+	case *corev1.Service:
+		e := existing.(*corev1.Service)
+		e.Spec.Ports = d.Spec.Ports
+		e.Spec.Selector = d.Spec.Selector
+		e.Spec.Type = d.Spec.Type
+	case *appsv1.StatefulSet:
+		existing.(*appsv1.StatefulSet).Spec = d.Spec
+	case *appsv1.Deployment:
+		existing.(*appsv1.Deployment).Spec = d.Spec
+	case *corev1.Secret:
+		e := existing.(*corev1.Secret)
+		e.Data = d.Data
+		e.StringData = d.StringData
+		e.Type = d.Type
+	case *rbacv1.Role:
+		existing.(*rbacv1.Role).Rules = d.Rules
+	case *rbacv1.RoleBinding:
+		existing.(*rbacv1.RoleBinding).Subjects = d.Subjects
+		// RoleRef is immutable after creation — do not copy.
+	case *corev1.ServiceAccount, *corev1.PersistentVolumeClaim, *corev1.Namespace:
+		// No mutable spec fields managed by this controller;
+		// label/annotation propagation above is sufficient.
+	}
+
+	return r.Patch(ctx, existing, client.MergeFrom(base))
+}
+
+// applyMetadata merges labels and annotations from desired into existing (additive).
+func applyMetadata(existing, desired client.Object) {
+	labels := existing.GetLabels()
+	if labels == nil {
+		labels = make(map[string]string)
+	}
+	for k, v := range desired.GetLabels() {
+		labels[k] = v
+	}
+	existing.SetLabels(labels)
+
+	annotations := existing.GetAnnotations()
+	if annotations == nil {
+		annotations = make(map[string]string)
+	}
+	for k, v := range desired.GetAnnotations() {
+		annotations[k] = v
+	}
+	existing.SetAnnotations(annotations)
 }
 
 // createOrUpdatePV handles PV creation/update (no owner reference for cluster-scoped resources)
@@ -595,6 +649,9 @@ func (r *KloneClusterReconciler) isDeploymentReady(ctx context.Context, namespac
 		Name:      name,
 		Namespace: namespace,
 	}, dep); err != nil {
+		if apierrors.IsNotFound(err) {
+			return false, nil
+		}
 		return false, err
 	}
 

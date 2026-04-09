@@ -77,8 +77,6 @@ func BuildControlPlaneStatefulSet(cluster *klonev1alpha1.KloneCluster) *appsv1.S
 						"app": "k3s-control-plane",
 					},
 					Annotations: map[string]string{
-						"container.apparmor.security.beta.kubernetes.io/k3s": "unconfined",
-						"container.seccomp.security.alpha.kubernetes.io/k3s": "unconfined",
 						// Prevent Karpenter from evicting the control plane pod (prevents hostPath data loss)
 						"karpenter.sh/do-not-disrupt": "true",
 					},
@@ -87,6 +85,11 @@ func BuildControlPlaneStatefulSet(cluster *klonev1alpha1.KloneCluster) *appsv1.S
 					HostPID:     true,
 					HostIPC:     true,
 					HostNetwork: false,
+					SecurityContext: &corev1.PodSecurityContext{
+						SeccompProfile: &corev1.SeccompProfile{
+							Type: corev1.SeccompProfileTypeUnconfined,
+						},
+					},
 					Containers: []corev1.Container{
 						{
 							Name:  "k3s",
@@ -94,6 +97,9 @@ func BuildControlPlaneStatefulSet(cluster *klonev1alpha1.KloneCluster) *appsv1.S
 							Args:  k3sArgs,
 							SecurityContext: &corev1.SecurityContext{
 								Privileged: boolPtr(true),
+								AppArmorProfile: &corev1.AppArmorProfile{
+									Type: corev1.AppArmorProfileTypeUnconfined,
+								},
 							},
 							Env: []corev1.EnvVar{
 								{
