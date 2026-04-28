@@ -126,3 +126,13 @@ const (
 	IngressTypeLoadBalancer = "loadbalancer"
 	IngressTypeNone         = "none"
 )
+
+// Annotation keys
+const (
+	// KubectlRestartAnnotationKey is the annotation used by kubectl rollout restart
+	KubectlRestartAnnotationKey = "kubectl.kubernetes.io/restartedAt"
+	// KloneManagedLabel is the label key applied to all klone-managed namespaces
+	KloneManagedLabel = "klone-managed"
+	// KloneManagedValue is the label value for klone-managed namespaces
+	KloneManagedValue = "true"
+)

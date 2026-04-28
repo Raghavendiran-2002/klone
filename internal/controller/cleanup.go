@@ -15,31 +15,30 @@ type CleanupController struct {
 	client.Client
 }
 
-// SetupCleanupController adds the cleanup controller to the manager
+// SetupCleanupController adds the cleanup controller to the manager.
+// CleanupController implements manager.Runnable so the manager controls its lifecycle.
 func SetupCleanupController(mgr manager.Manager) error {
 	c := &CleanupController{
 		Client: mgr.GetClient(),
 	}
-
-	// Start background cleanup routine
-	go c.runCleanupLoop()
-
-	return nil
+	return mgr.Add(c)
 }
 
-// runCleanupLoop runs periodic cleanup tasks
-func (c *CleanupController) runCleanupLoop() {
+// Start implements manager.Runnable. It runs the periodic cleanup loop until ctx is cancelled.
+func (c *CleanupController) Start(ctx context.Context) error {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
 
 	log := logf.Log.WithName("cleanup-controller")
 
-	for range ticker.C {
-		ctx := context.Background()
-
-		// Clean up stuck terminating namespaces
-		if err := c.cleanupTerminatingNamespaces(ctx); err != nil {
-			log.Error(err, "Failed to cleanup terminating namespaces")
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-ticker.C:
+			if err := c.cleanupTerminatingNamespaces(ctx); err != nil {
+				log.Error(err, "Failed to clean up terminating namespaces")
+			}
 		}
 	}
 }
@@ -51,7 +50,7 @@ func (c *CleanupController) cleanupTerminatingNamespaces(ctx context.Context) er
 	// List all namespaces with klone-managed label
 	namespaceList := &corev1.NamespaceList{}
 	if err := c.List(ctx, namespaceList, client.MatchingLabels{
-		"klone-managed": "true",
+		KloneManagedLabel: KloneManagedValue,
 	}); err != nil {
 		return err
 	}
@@ -73,7 +72,7 @@ func (c *CleanupController) cleanupTerminatingNamespaces(ctx context.Context) er
 			continue
 		}
 
-		log.Info("Found stuck terminating namespace, clearing finalizers",
+		log.Info("Namespace stuck in Terminating state, clearing finalizers",
 			"namespace", ns.Name,
 			"terminatingFor", terminatingDuration.String())
 

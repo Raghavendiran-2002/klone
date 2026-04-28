@@ -40,7 +40,7 @@ func (r *KloneClusterReconciler) EnsureHostMetricsServer(ctx context.Context) er
 	}
 
 	// Metrics-server not found, check if we should install it
-	log.Info("Metrics-server not found in host cluster, checking for installation job")
+	log.Info("Metrics-server not found in host cluster, checking installation job status")
 
 	// Check if installation job already exists
 	jobName := "install-host-metrics-server"
@@ -75,7 +75,7 @@ func (r *KloneClusterReconciler) EnsureHostMetricsServer(ctx context.Context) er
 		return fmt.Errorf("failed to create host metrics-server installation job: %w", err)
 	}
 
-	log.Info("Created host metrics-server installation job")
+	log.Info("Created host metrics-server installation job", "namespace", "klone")
 	return nil
 }
 

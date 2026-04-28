@@ -16,7 +16,7 @@ func BuildNamespace(cluster *klonev1alpha1.KloneCluster) *corev1.Namespace {
 		ObjectMeta: metav1.ObjectMeta{
 			Name: GetNamespaceName(cluster.Name),
 			Labels: map[string]string{
-				"klone-managed":                "true",
+				KloneManagedLabel:              KloneManagedValue,
 				"klone-cluster-name":           cluster.Name,
 				"app.kubernetes.io/name":       "klone",
 				"app.kubernetes.io/instance":   cluster.Name,
@@ -61,7 +61,7 @@ func BuildPersistentVolumeWithNode(cluster *klonev1alpha1.KloneCluster, targetNo
 		ObjectMeta: metav1.ObjectMeta{
 			Name: pvName,
 			Labels: map[string]string{
-				"klone-managed":      "true",
+				KloneManagedLabel:    KloneManagedValue,
 				"klone-cluster-name": cluster.Name,
 			},
 		},
@@ -324,7 +324,7 @@ func BuildCredentialsSecret(cluster *klonev1alpha1.KloneCluster, username, passw
 			Name:      GetCredentialsSecretName(cluster.Name),
 			Namespace: "default",
 			Labels: map[string]string{
-				"klone-managed":                "true",
+				KloneManagedLabel:              KloneManagedValue,
 				"klone-cluster-name":           cluster.Name,
 				"app.kubernetes.io/name":       "klone",
 				"app.kubernetes.io/component":  "credentials",

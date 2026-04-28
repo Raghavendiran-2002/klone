@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	klonev1alpha1 "github.com/klone/operator/api/v1alpha1"
@@ -36,7 +37,7 @@ func (r *KloneClusterReconciler) handleRestartAnnotation(ctx context.Context, cl
 		return nil
 	}
 
-	log.Info("Restart requested for cluster", "cluster", cluster.Name, "timestamp", restartRequested)
+	log.Info("Restart requested", "cluster", cluster.Name, "timestamp", restartRequested)
 
 	namespaceName := GetNamespaceName(cluster.Name)
 	restartTime := time.Now().Format(time.RFC3339)
@@ -50,12 +51,11 @@ func (r *KloneClusterReconciler) handleRestartAnnotation(ctx context.Context, cl
 		if ss.Spec.Template.Annotations == nil {
 			ss.Spec.Template.Annotations = make(map[string]string)
 		}
-		ss.Spec.Template.Annotations["kubectl.kubernetes.io/restartedAt"] = restartTime
+		ss.Spec.Template.Annotations[KubectlRestartAnnotationKey] = restartTime
 		if err := r.Update(ctx, ss); err != nil {
-			log.Error(err, "Failed to restart control plane StatefulSet")
-		} else {
-			log.Info("Restarted control plane StatefulSet")
+			return fmt.Errorf("failed to restart control plane StatefulSet: %w", err)
 		}
+		log.Info("Restarted control plane StatefulSet")
 	}
 
 	// Restart worker Deployment
@@ -67,12 +67,11 @@ func (r *KloneClusterReconciler) handleRestartAnnotation(ctx context.Context, cl
 		if workerDep.Spec.Template.Annotations == nil {
 			workerDep.Spec.Template.Annotations = make(map[string]string)
 		}
-		workerDep.Spec.Template.Annotations["kubectl.kubernetes.io/restartedAt"] = restartTime
+		workerDep.Spec.Template.Annotations[KubectlRestartAnnotationKey] = restartTime
 		if err := r.Update(ctx, workerDep); err != nil {
-			log.Error(err, "Failed to restart worker Deployment")
-		} else {
-			log.Info("Restarted worker Deployment")
+			return fmt.Errorf("failed to restart worker Deployment: %w", err)
 		}
+		log.Info("Restarted worker Deployment")
 	}
 
 	// Restart terminal Deployment
@@ -84,12 +83,11 @@ func (r *KloneClusterReconciler) handleRestartAnnotation(ctx context.Context, cl
 		if terminalDep.Spec.Template.Annotations == nil {
 			terminalDep.Spec.Template.Annotations = make(map[string]string)
 		}
-		terminalDep.Spec.Template.Annotations["kubectl.kubernetes.io/restartedAt"] = restartTime
+		terminalDep.Spec.Template.Annotations[KubectlRestartAnnotationKey] = restartTime
 		if err := r.Update(ctx, terminalDep); err != nil {
-			log.Error(err, "Failed to restart terminal Deployment")
-		} else {
-			log.Info("Restarted terminal Deployment")
+			return fmt.Errorf("failed to restart terminal Deployment: %w", err)
 		}
+		log.Info("Restarted terminal Deployment")
 	}
 
 	// Mark restart as applied
@@ -98,8 +96,7 @@ func (r *KloneClusterReconciler) handleRestartAnnotation(ctx context.Context, cl
 	}
 	cluster.Annotations[RestartAnnotationApplied] = restartRequested
 	if err := r.Update(ctx, cluster); err != nil {
-		log.Error(err, "Failed to update restart annotation")
-		return err
+		return fmt.Errorf("failed to update restart annotation: %w", err)
 	}
 
 	log.Info("Cluster restart completed", "cluster", cluster.Name)

@@ -20,7 +20,7 @@ func (r *KloneClusterReconciler) relocateClusterToNode(ctx context.Context, clus
 	log := logf.FromContext(ctx)
 	namespaceName := cluster.Name
 
-	log.Info("Starting cluster relocation", "cluster", cluster.Name, "targetNode", targetNode)
+	log.Info("Cluster relocation started", "cluster", cluster.Name, "targetNode", targetNode)
 
 	// Step 0: Record relocation time BEFORE any destructive operations so the
 	// 5-minute cooldown applies even if the relocation fails partway through.
@@ -50,7 +50,7 @@ func (r *KloneClusterReconciler) relocateClusterToNode(ctx context.Context, clus
 
 	// Step 4: Wait for workloads to be deleted
 	if err := r.waitForWorkloadDeletion(ctx, namespaceName); err != nil {
-		log.Info("Waiting for workload deletion, will retry", "error", err.Error())
+		log.Info("Workloads not yet deleted, requeueing", "error", err.Error())
 		// Return error to requeue
 		return err
 	}

@@ -110,16 +110,18 @@ func (r *KloneClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		return r.handleDeletion(ctx, cluster)
 	}
 
-	// Add finalizer if not present
+	// Add finalizer if not present — use Patch to avoid resource-version conflicts
 	if !controllerutil.ContainsFinalizer(cluster, KloneFinalizer) {
+		patch := client.MergeFrom(cluster.DeepCopy())
 		controllerutil.AddFinalizer(cluster, KloneFinalizer)
-		if err := r.Update(ctx, cluster); err != nil {
+		if err := r.Patch(ctx, cluster, patch); err != nil {
 			return ctrl.Result{}, err
 		}
 	}
 
 	// Allocate CIDRs if not already set
 	if cluster.Status.ClusterCIDR == "" || cluster.Status.ServiceCIDR == "" {
+		statusPatch := client.MergeFrom(cluster.DeepCopy())
 		clusterCIDR, serviceCIDR := AllocateCIDRs(cluster.Name)
 		cluster.Status.ClusterCIDR = clusterCIDR
 		cluster.Status.ServiceCIDR = serviceCIDR
@@ -127,8 +129,8 @@ func (r *KloneClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		cluster.Status.PersistentVolume = GetPVName(cluster.Name)
 		cluster.Status.Phase = PhaseCreating
 
-		if err := r.Status().Update(ctx, cluster); err != nil {
-			log.Error(err, "Failed to update status with CIDRs")
+		if err := r.Status().Patch(ctx, cluster, statusPatch); err != nil {
+			log.Error(err, "Failed to patch status with CIDRs")
 			return ctrl.Result{}, err
 		}
 	}
@@ -141,9 +143,12 @@ func (r *KloneClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	// Reconcile all resources
 	if err := r.reconcileResources(ctx, cluster); err != nil {
 		log.Error(err, "Failed to reconcile resources")
-		// Update status to Failed
+		// Patch status to Failed — best-effort, original error is still returned
+		statusPatch := client.MergeFrom(cluster.DeepCopy())
 		cluster.Status.Phase = PhaseFailed
-		_ = r.Status().Update(ctx, cluster)
+		if patchErr := r.Status().Patch(ctx, cluster, statusPatch); patchErr != nil {
+			log.Error(patchErr, "Failed to patch status to Failed")
+		}
 		return ctrl.Result{}, err
 	}
 
@@ -256,13 +261,13 @@ func (r *KloneClusterReconciler) reconcileResources(ctx context.Context, cluster
 	// 7. Check if control plane and workers are ready before deploying terminal
 	controlPlaneReady, err := r.isStatefulSetReady(ctx, namespaceName, GetControlPlaneStatefulSetName())
 	if err != nil {
-		log.Info("Control plane not ready yet, waiting...", "error", err)
+		log.Info("Control plane not ready, requeueing", "error", err)
 		return nil
 	}
 
 	workerReady, err := r.isDeploymentReady(ctx, namespaceName, GetWorkerDeploymentName())
 	if err != nil {
-		log.Info("Workers not ready yet, waiting...", "error", err)
+		log.Info("Workers not ready, requeueing", "error", err)
 		return nil
 	}
 
@@ -299,7 +304,7 @@ func (r *KloneClusterReconciler) reconcileResources(ctx context.Context, cluster
 
 	// Only deploy terminal if control plane and workers are ready
 	if controlPlaneReady && workerReady {
-		log.Info("Control plane and workers are ready, deploying terminal")
+		log.Info("Control plane and workers ready, reconciling terminal")
 		terminalDep := BuildTerminalDeployment(cluster)
 		if err := r.createOrUpdate(ctx, terminalDep); err != nil {
 			return fmt.Errorf("failed to reconcile terminal: %w", err)
@@ -314,7 +319,7 @@ func (r *KloneClusterReconciler) reconcileResources(ctx context.Context, cluster
 			log.Info("Terminal pod is unschedulable", "reason", reason, "targetNode", targetNode)
 
 			if r.shouldRelocate(ctx, cluster) {
-				log.Info("Triggering cluster relocation to resolve terminal pod scheduling issue",
+				log.Info("Relocating cluster to resolve terminal pod scheduling issue",
 					"targetNode", targetNode, "reason", reason)
 
 				if err := r.setRelocationCondition(ctx, cluster, true, reason); err != nil {
@@ -339,7 +344,7 @@ func (r *KloneClusterReconciler) reconcileResources(ctx context.Context, cluster
 			log.Info("Relocation skipped (already in progress or too frequent)")
 		}
 	} else {
-		log.Info("Waiting for control plane and workers to be ready before deploying terminal",
+		log.Info("Terminal deployment deferred, control plane or workers not ready",
 			"controlPlaneReady", controlPlaneReady, "workerReady", workerReady)
 	}
 
@@ -723,13 +728,14 @@ func (r *KloneClusterReconciler) updateStatus(ctx context.Context, cluster *klon
 		}
 	}
 
-	// Update conditions
+	// Update conditions — ObservedGeneration lets consumers distinguish stale from current conditions
 	readyCondition := metav1.Condition{
 		Type:               ConditionReady,
 		Status:             metav1.ConditionFalse,
 		Reason:             "ResourcesNotReady",
 		Message:            "Waiting for all resources to be ready",
 		LastTransitionTime: metav1.Now(),
+		ObservedGeneration: cluster.Generation,
 	}
 
 	if allReady {
@@ -745,6 +751,7 @@ func (r *KloneClusterReconciler) updateStatus(ctx context.Context, cluster *klon
 		Reason:             "TerminalNotReady",
 		Message:            "Terminal pod is not ready",
 		LastTransitionTime: metav1.Now(),
+		ObservedGeneration: cluster.Generation,
 	}
 
 	if terminalReady {

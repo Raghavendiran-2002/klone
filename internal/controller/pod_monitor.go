@@ -226,7 +226,7 @@ func (r *KloneClusterReconciler) findNodeWithCapacity(ctx context.Context, _ *kl
 	for _, node := range nodeList.Items {
 		// Skip nodes that are not ready
 		if !isNodeReady(&node) {
-			log.Info("Skipping unready node", "node", node.Name)
+			log.V(1).Info("Skipped unready node", "node", node.Name)
 			continue
 		}
 
@@ -256,7 +256,7 @@ func (r *KloneClusterReconciler) findNodeWithCapacity(ctx context.Context, _ *kl
 
 		availableCapacity := maxPods - currentPods
 
-		log.Info("Checking node capacity",
+		log.V(1).Info("Checked node capacity",
 			"node", node.Name,
 			"maxPods", maxPods,
 			"currentPods", currentPods,
